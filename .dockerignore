@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.*
+*.pem
+*.key
+error_log
+**/error_log
+database.sql
+scratch/
+verify/
+/account/uploads/
+/admin/c2wad/uploads/
+start-local.ps1

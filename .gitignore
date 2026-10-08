@@ -1,0 +1,12 @@
+.env
+.env.*
+*.pem
+*.key
+*.log
+error_log
+**/error_log
+/database.sql
+/scratch/
+/verify/
+/account/uploads/
+/admin/c2wad/uploads/

@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: redmanfinance-production
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    disk:
+      name: redmanfinance-production-files
+      mountPath: /var/www/html/storage
+      sizeGB: 1
+    envVars:
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_SSL_CA
+        value: /etc/secrets/aiven-ca.pem
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
