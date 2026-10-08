@@ -1,15 +1,11 @@
 services:
   - type: web
-    name: redmanfinance-production
+    name: redmanfinance
     runtime: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /
-    disk:
-      name: redmanfinance-production-files
-      mountPath: /var/www/html/storage
-      sizeGB: 1
     envVars:
       - key: DB_HOST
         sync: false
