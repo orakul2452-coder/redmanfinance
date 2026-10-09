@@ -43,6 +43,52 @@ if ($withdrawals) {
 }
 $withdrawable = max(0, min($ubalance, $uprofit - (float)$withdrawnProfit));
 
+$currencyCatalog = [
+    'bitcoin' => 'Bitcoin (BTC)',
+    'ethereum' => 'Ethereum (ETH)',
+    'tether (usdt)' => 'Tether (USDT)',
+    'usd coin (usdc)' => 'USD Coin (USDC)',
+    'bnb' => 'BNB',
+    'solana' => 'Solana (SOL)',
+    'xrp' => 'XRP',
+    'dogecoin' => 'Dogecoin (DOGE)',
+    'cardano (ada)' => 'Cardano (ADA)',
+    'tron (trx)' => 'TRON (TRX)',
+    'litecoin' => 'Litecoin (LTC)',
+    'avalanche (avax)' => 'Avalanche (AVAX)',
+    'polkadot (dot)' => 'Polkadot (DOT)',
+    'chainlink (link)' => 'Chainlink (LINK)',
+    'toncoin (ton)' => 'Toncoin (TON)',
+    'polygon (pol)' => 'Polygon (POL)',
+];
+$currencyAliases = [
+    'btc' => 'bitcoin',
+    'bitcoins' => 'bitcoin',
+    'eth' => 'ethereum',
+    'usdt' => 'tether (usdt)',
+    'tether' => 'tether (usdt)',
+    'usdc' => 'usd coin (usdc)',
+    'ada' => 'cardano (ada)',
+    'trx' => 'tron (trx)',
+    'ltc' => 'litecoin',
+    'avax' => 'avalanche (avax)',
+    'dot' => 'polkadot (dot)',
+    'link' => 'chainlink (link)',
+    'ton' => 'toncoin (ton)',
+    'pol' => 'polygon (pol)',
+];
+$configuredCurrencies = $link->query("SELECT DISTINCT name FROM wallet WHERE name IS NOT NULL AND TRIM(name) <> '' ORDER BY name");
+if ($configuredCurrencies) {
+    while ($configuredCurrency = $configuredCurrencies->fetch_assoc()) {
+        $currencyName = trim((string)$configuredCurrency['name']);
+        $currencyKey = strtolower($currencyName);
+        $currencyKey = $currencyAliases[$currencyKey] ?? $currencyKey;
+        if (!isset($currencyCatalog[$currencyKey])) {
+            $currencyCatalog[$currencyKey] = $currencyName;
+        }
+    }
+}
+
 // Form processing
 if(isset($_POST['send'])) {
     $amountInput = trim($_POST['amount'] ?? '');
@@ -52,10 +98,13 @@ if(isset($_POST['send'])) {
         $amount = (float)$amountInput;
     }
     
-    if (empty($_POST["currency"])) {
+    $requestedCurrency = trim((string)($_POST['currency'] ?? ''));
+    $currencyKey = strtolower($requestedCurrency);
+    $currencyKey = $currencyAliases[$currencyKey] ?? $currencyKey;
+    if ($requestedCurrency === '' || !isset($currencyCatalog[$currencyKey])) {
         $msg = "Currency is required";
     } else {
-        $mode = $link->real_escape_string($_POST["currency"]);
+        $mode = $currencyCatalog[$currencyKey];
     }
     
     if (empty($_POST["wallet"])) {
@@ -92,9 +141,9 @@ if(isset($_POST['send'])) {
         }
 
         $update = $link->prepare("UPDATE users SET walletbalance = walletbalance - ? WHERE email = ? AND walletbalance >= ?");
-        $insert = $link->prepare("INSERT INTO btc (plan, cointype, allamount, mode, usd, type, email, status, account, comment, tnxid, refcode, referred, date) VALUES ('', '', '', ?, ?, 'Withdrawal', ?, 'pending', ?, '', ?, ?, ?, ?)");
+        $insert = $link->prepare("INSERT INTO btc (plan, cointype, allamount, mode, usd, type, email, status, account, comment, tnxid, refcode, referred, date) VALUES ('', ?, '', ?, ?, 'Withdrawal', ?, 'pending', ?, '', ?, ?, ?, ?)");
         $updated = $msg === '' && $update && $update->bind_param('dsd', $amount, $email, $amount) && $update->execute() && $update->affected_rows === 1;
-        $recorded = $updated && $insert && $insert->bind_param('sdssssss', $mode, $amount, $email, $wallet, $tnx, $refcode, $referred, $date) && $insert->execute();
+        $recorded = $updated && $insert && $insert->bind_param('ssdssssss', $mode, $mode, $amount, $email, $wallet, $tnx, $refcode, $referred, $date) && $insert->execute();
 
         if ($recorded && $link->commit()) {
                 // Send confirmation email
@@ -177,14 +226,6 @@ if(isset($_POST['send'])) {
             }
         }
     }
-}
-
-// Get user's available currencies
-$sql1wth = "SELECT * FROM btc WHERE email = '$email' AND type = 'Deposit' AND status = 'approved'";
-$resultwth = mysqli_query($link, $sql1wth);
-$availableCurrencies = [];
-while($row1wth = mysqli_fetch_assoc($resultwth)){
-    $availableCurrencies[$row1wth['cointype']] = 1;
 }
 
 // Get current balance
@@ -372,17 +413,12 @@ if(mysqli_num_rows($result) > 0){
                                 
                                 <div>
                                     <label class="block text-gray-300 mb-2">Select Currency</label>
+                                    <input type="search" id="currency-search" class="w-full px-4 py-2 form-input rounded mb-2" placeholder="Search currencies" autocomplete="off" aria-label="Search currencies">
                                     <select name="currency" class="w-full px-4 py-2 form-input rounded" required>
-                                        <?php 
-                                        $sql22 = mysqli_query($link, "SELECT * FROM wallet");
-                                        if(mysqli_num_rows($sql22) > 0){
-                                            while ($row = mysqli_fetch_assoc($sql22)) {
-                                                $namee = $row['name'];
-                                                $selected = isset($availableCurrencies[$namee]) ? '' : 'disabled';
-                                                echo "<option value='$namee' $selected>$namee</option>";
-                                            }
-                                        }
-                                        ?>
+                                        <option value="">Select a currency</option>
+                                        <?php foreach ($currencyCatalog as $currencyName): ?>
+                                            <option value="<?php echo htmlspecialchars($currencyName, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($currencyName, ENT_QUOTES, 'UTF-8'); ?></option>
+                                        <?php endforeach; ?>
                                     </select>
                                 </div>
                                 
@@ -426,6 +462,17 @@ if(mysqli_num_rows($result) > 0){
 
     <!-- Scripts -->
     <script>
+        const currencySearch = document.getElementById('currency-search');
+        const currencySelect = document.querySelector('select[name="currency"]');
+        currencySearch.addEventListener('input', function () {
+            const query = this.value.trim().toLowerCase();
+            for (const option of currencySelect.options) {
+                if (!option.value) continue;
+                option.hidden = query !== '' && !option.text.toLowerCase().includes(query);
+            }
+            if (currencySelect.selectedOptions[0]?.hidden) currencySelect.value = '';
+        });
+
         // Mobile menu toggle
         document.querySelector('.md\\:hidden').addEventListener('click', function() {
             document.querySelector('.fixed.inset-y-0').classList.toggle('-translate-x-full');
