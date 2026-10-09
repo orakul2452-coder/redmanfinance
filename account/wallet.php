@@ -5,7 +5,7 @@ include "../config.php";
 
 $msg = "";
 if (!isset($_SESSION['email'])) {
-    header("location:../login.php");
+    header("Location: ../trade/login.php");
     exit();
 }
 
@@ -20,12 +20,19 @@ $userQuery->bind_param('s', $email);
 $userQuery->execute();
 $row1 = $userQuery->get_result()->fetch_assoc();
 if (!$row1) {
-    header("location:../login.php");
+    header("Location: ../trade/login.php");
     exit();
 }
 
 $pdbalance = (float)$row1['walletbalance'];
 $pdprofit = (float)$row1['profit'];
+$bitcoinWalletAddress = '';
+$walletQuery = $link->prepare("SELECT address FROM wallet WHERE LOWER(name) IN ('bitcoin', 'bitcoins', 'btc') ORDER BY CASE WHEN LOWER(name) = 'bitcoin' THEN 0 WHEN LOWER(name) = 'bitcoins' THEN 1 ELSE 2 END, id DESC LIMIT 1");
+if ($walletQuery && $walletQuery->execute()) {
+    $walletResult = $walletQuery->get_result();
+    $walletRow = $walletResult->fetch_assoc();
+    $bitcoinWalletAddress = trim((string)($walletRow['address'] ?? ''));
+}
 $withdrawnQuery = $link->prepare("SELECT COALESCE(SUM(usd), 0) AS total_value FROM btc WHERE type = 'Withdrawal' AND email = ? AND status = 'approved'");
 $withdrawnQuery->bind_param('s', $email);
 $withdrawnQuery->execute();
@@ -38,6 +45,8 @@ if (isset($_POST['submit'])) {
 
     if (!hash_equals($_SESSION['wallet_topup_csrf'], $csrfToken)) {
         $msg = "Your request expired. Reload the page and try again.";
+    } elseif ($bitcoinWalletAddress === '') {
+        $msg = "Bitcoin deposits are temporarily unavailable because no Bitcoin wallet address is configured.";
     } elseif ($amount === false || $amount <= 0 || $paymentReference === '' || strlen($paymentReference) > 200) {
         $msg = "Enter a valid amount and payment transaction ID.";
     } else {
@@ -375,23 +384,7 @@ if (isset($_POST['submit'])) {
                                         <h4 class="title">Add funds to wallet</h4>
                                         <p class="category">Submit a Bitcoin payment reference. Funds become available after an administrator verifies the payment.</p>
                                     </div>
-                                    <div class="content">
-<?php   
-        $sql1= "SELECT * FROM admin";
-  $result1 = mysqli_query($link,$sql1);
-  if(mysqli_num_rows($result1) > 0){
-  $row23 = mysqli_fetch_assoc($result1);
-
-    if(isset($row23['bwallet'])){
-  $bw = $row23['bwallet'];
-}else{
-  $bw="cant find wallet";
-}
-}
-?>
-                                                                                        
-                                                
-                                                                                    </div>
+                                                                        <div class="content"></div>
                                 </div>
                             </div>
                             </div>
@@ -408,9 +401,10 @@ if (isset($_POST['submit'])) {
           </br>
                                                 <div class="col-md-6">
                                                                 <div class="form-group">
-                                                                    <p>Make payment to the below Bitcoin Wallet </p>
-                                                                    <input type="text" class="form-control" value="<?php echo $bw ;?>" id="myInputs" readonly>
-                                                                    <button onclick="myFunctions()" class="btn btn-info btn-fill"> Copy Bitcoin Address </button>
+                                                                    <?php if ($bitcoinWalletAddress !== ''): ?>
+                                                                    <p>Make payment to the below Bitcoin Wallet</p>
+                                                                    <input type="text" class="form-control" value="<?php echo htmlspecialchars($bitcoinWalletAddress, ENT_QUOTES, 'UTF-8');?>" id="myInputs" readonly>
+                                                                    <button type="button" onclick="myFunctions()" class="btn btn-info btn-fill">Copy Bitcoin Address</button>
                                                                     <script>
                                                                     function myFunctions() {
                                                                     var copyText = document.getElementById("myInputs");
@@ -419,6 +413,9 @@ if (isset($_POST['submit'])) {
                                                                     alert("Copied the wallet address: " + copyText.value);
                                                                     }
                                                                     </script>
+                                                                    <?php else: ?>
+                                                                    <p>Bitcoin deposits are temporarily unavailable. Please contact support.</p>
+                                                                    <?php endif; ?>
                                                                 </div>
                                                             </div>
                                                
@@ -428,15 +425,15 @@ if (isset($_POST['submit'])) {
                                                             <div class="col-md-12">
                                                                 <div class="form-group">
                                                                     <label>Amount in USD</label>
-                                                                    <input type="number" id="usd" name="usd" placeholder="Amount in USD" class="form-control" min="0.01" step="0.01" required>
+                                                                    <input type="number" id="usd" name="usd" placeholder="Amount in USD" class="form-control" min="0.01" step="0.01" required <?php echo $bitcoinWalletAddress === '' ? 'disabled' : ''; ?>>
                                                                    
                                                                 </div>
                                                             </div>
                                                             <div class="col-md-12">
                                                                 <div class="form-group">
                                                                     <label>Paste the transferred btc transaction ID</label>
-                                                                    <input type="text" name="btctnx" placeholder="Paste the transferred Bitcoin transaction ID" class="form-control" required>
-        <button type="submit" name="submit" class="btn btn-info btn-fill pull-right">Deposit</button>
+                                                                    <input type="text" name="btctnx" placeholder="Paste the transferred Bitcoin transaction ID" class="form-control" required <?php echo $bitcoinWalletAddress === '' ? 'disabled' : ''; ?>>
+                <button type="submit" name="submit" class="btn btn-info btn-fill pull-right" <?php echo $bitcoinWalletAddress === '' ? 'disabled' : ''; ?>>Deposit</button>
                                                                 </div>
                                                             </div>
                                                             <hr/>
