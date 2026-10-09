@@ -10,6 +10,10 @@ if(!isset($_SESSION['uid'])){
 }
 
 $msg = "";
+$msgType = "success";
+if (empty($_SESSION['withdrawal_admin_csrf'])) {
+  $_SESSION['withdrawal_admin_csrf'] = bin2hex(random_bytes(32));
+}
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
@@ -33,99 +37,100 @@ if(isset($_POST['backdate'])){
   }
 }
 
-if(isset($_POST['approve'])){
-	
-	$tnx = $_POST['tnx'];
-	$moni = $_POST['moni'];
-	$email = $_POST['email'];
-  $umode = $_POST['umode'];
-	
+if (isset($_POST['approve'])) {
+  $transactionId = filter_input(INPUT_POST, 'transaction_id', FILTER_VALIDATE_INT);
+  $approvedAddress = trim((string)($_POST['approved_account'] ?? ''));
+  $csrfToken = $_POST['csrf_token'] ?? '';
 
-		
-		$sql1 = "UPDATE btc SET status = 'approved'  WHERE id = '$tnx'";
-		
-		$sql2= "SELECT * FROM btc WHERE id = '$tnx'";
-  $result2 = mysqli_query($link,$sql2);
-  if(mysqli_num_rows($result2) > 0){
-   $row = mysqli_fetch_assoc($result2);
-   $row['status'];
- 
-  }
-  
-  $sqlus= "SELECT * FROM users WHERE email = '$email'";
-  $resultus = mysqli_query($link,$sqlus);
-  if(mysqli_num_rows($resultus) > 0){
-   $rowus = mysqli_fetch_assoc($resultus);
-   $usernamewtc = $rowus['username'];
- 
-  }
- 
-if(isset($row['status']) &&  $row['status']== "approved"){
-	
-	$msg = "Transaction already approved!";
+  if (!$transactionId || !hash_equals($_SESSION['withdrawal_admin_csrf'], $csrfToken)) {
+    $msg = "Invalid withdrawal approval request.";
+    $msgType = "danger";
+  } elseif ($approvedAddress === '' || strlen($approvedAddress) > 200) {
+    $msg = "Enter a valid approved destination address (maximum 200 characters).";
+    $msgType = "danger";
+  } else {
+    $link->begin_transaction();
+    try {
+      $select = $link->prepare("SELECT email, usd, mode, account, comment, status FROM btc WHERE id = ? AND type = 'Withdrawal' FOR UPDATE");
+      if (!$select) {
+        throw new RuntimeException("Unable to load the withdrawal request.");
+      }
+      $select->bind_param('i', $transactionId);
+      $select->execute();
+      $withdrawal = $select->get_result()->fetch_assoc();
+      $select->close();
 
-}else{
-		
-		if(mysqli_query($link, $sql1)){
-	
-		$msg = "transaction approved successfully";
-if($msg = "transaction approved successfully"){
-		
-		
-		
-		include_once "PHPMailer/PHPMailer.php";
-    require_once 'PHPMailer/Exception.php';
-    
-    $mail= new PHPMailer();
-     $mail->setFrom($emaila);
-   $mail->FromName = $name;
-    $mail->addAddress($email, $usernamewtc);
-    $mail->Subject = "Withdrawal Request Approval";
-    $mail->isHTML(true);
-    $mail->Body = '
-    
-    
-  <div style="width: 100%;height: 100%; font-family: sans-serif; font-weight: 100;" class="be_container"> 
- 
- <div style="max-width: 600px;margin: 0px auto;padding: 30px;"class="be_inner_containr"> <div class="be_header">
- 
- 
- 
- <div class="be_user" style="float: left"> <p>Dear: '.$usernamewtc.'</p> </div> 
- 
- <div style="clear: both;"></div> 
- 
- <div class="be_bluebar" style=" padding: 20px; margin-top: 10px;">
- 
- <h1>Withdrawal Approval</h1>
- 
- </div> </div> 
- 
- <div class="be_body" style="color: #FF6600;padding: 20px;"> <p style="line-height: 25px; color:#FF6600;"> 
- 
-Your withdrawal request of '.$moni.' USD worth of '.$umode.' has been approved. Thank for investing in us.
- 
- </p>
- 
- <div class="be_footer">
- <div style="border-bottom: 1px solid #ccc;"></div>
- 
- 
- <div class="be_bluebar" style=" padding: 20px; margin-top: 10px;">
- 
- <p>
- Copyright ©'.$cy.' '.$name.'. </p> <div class="be_logo" style=" width:60px;height:40px;float: right;"> </div> </div> </div> </div></div>';
-     
-    
-    if($mail->send()){
-  
-      
+      if (!$withdrawal || $withdrawal['status'] !== 'pending') {
+        throw new RuntimeException("This withdrawal is missing or has already been processed.");
+      }
+
+      $originalAddress = trim((string)$withdrawal['account']);
+      $audit = json_decode((string)$withdrawal['comment'], true);
+      if (!is_array($audit) || ($audit['kind'] ?? '') !== 'admin_withdrawal_address_audit') {
+        $audit = [
+          'kind' => 'admin_withdrawal_address_audit',
+          'original_destination' => $originalAddress,
+          'previous_comment' => (string)$withdrawal['comment'],
+          'changes' => [],
+        ];
+      }
+      $audit['changes'][] = [
+        'approved_destination' => $approvedAddress,
+        'approved_by_admin_id' => (int)$_SESSION['uid'],
+        'approved_at' => date('Y-m-d H:i:s'),
+      ];
+      $auditJson = json_encode($audit, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+      if ($auditJson === false) {
+        throw new RuntimeException("Unable to record the address audit history.");
+      }
+
+      $approve = $link->prepare("UPDATE btc SET account = ?, comment = ?, status = 'approved' WHERE id = ? AND type = 'Withdrawal' AND status = 'pending'");
+      if (!$approve) {
+        throw new RuntimeException("Unable to prepare withdrawal approval.");
+      }
+      $approve->bind_param('ssi', $approvedAddress, $auditJson, $transactionId);
+      $approve->execute();
+      if ($approve->affected_rows !== 1) {
+        $approve->close();
+        throw new RuntimeException("The withdrawal could not be approved.");
+      }
+      $approve->close();
+      if (!$link->commit()) {
+        throw new RuntimeException("The withdrawal approval transaction could not be committed.");
+      }
+      $msg = "Withdrawal approved. Original and approved destination addresses were recorded.";
+
+      try {
+        require_once 'PHPMailer/PHPMailer.php';
+        require_once 'PHPMailer/Exception.php';
+        $userLookup = $link->prepare("SELECT username FROM users WHERE email = ? LIMIT 1");
+        $username = '';
+        if ($userLookup && $userLookup->bind_param('s', $withdrawal['email']) && $userLookup->execute()) {
+          $userLookup->bind_result($username);
+          $userLookup->fetch();
+          $userLookup->close();
+        }
+
+        $mail = new PHPMailer(true);
+        $mail->setFrom($emaila, $name);
+        $mail->addAddress($withdrawal['email'], $username);
+        $mail->Subject = "Withdrawal Request Approval";
+        $mail->isHTML(true);
+        $mail->Body = '<p>Dear ' . htmlspecialchars($username, ENT_QUOTES, 'UTF-8') . ',</p>'
+          . '<p>Your withdrawal request of $' . number_format((float)$withdrawal['usd'], 2) . ' USD ('
+          . htmlspecialchars($withdrawal['mode'], ENT_QUOTES, 'UTF-8') . ') was approved.</p>'
+          . '<p>Approved destination: <strong>' . htmlspecialchars($approvedAddress, ENT_QUOTES, 'UTF-8') . '</strong></p>';
+        $mail->AltBody = 'Your withdrawal of $' . number_format((float)$withdrawal['usd'], 2) . ' USD was approved. Approved destination: ' . $approvedAddress;
+        $mail->send();
+      } catch (Throwable $mailError) {
+        error_log('Withdrawal approval email failed for transaction ' . $transactionId . ': ' . $mailError->getMessage());
+      }
+    } catch (Throwable $error) {
+      $link->rollback();
+      $msg = $error->getMessage();
+      $msgType = "danger";
     }
-} else {
-    $msg = "transaction was not approved! ";
-}
-		}
-}
+  }
 }
 
 
@@ -220,7 +225,7 @@ include 'header.php';
 		  </br>
 
 </br>
- <?php if($msg != "") echo "<div style='padding:20px;background-color:#dce8f7;color:black'> $msg</div class='btn btn-success'>" ."</br></br>";  ?>
+ <?php if($msg != "") echo "<div class='alert alert-" . htmlspecialchars($msgType, ENT_QUOTES, 'UTF-8') . "'>" . htmlspecialchars($msg, ENT_QUOTES, 'UTF-8') . "</div>"; ?>
          
 <div class="col-md-12 col-sm-12 col-sx-12">
                <div class="table-responsive">
@@ -233,7 +238,8 @@ include 'header.php';
 						<tr class="info">
 						<th>Email</th>
             <th>Mode</th>
-						<th>Wallet/Account Address</th>
+                    <th>Original destination</th>
+                    <th>Approved destination</th>
 						<th style="display:none;"></th>
 						<th style="display:none;"></th>
             <th style="display:none;"></th>
@@ -257,6 +263,16 @@ include 'header.php';
 			  if(mysqli_num_rows($result) > 0){
 				  while($row = mysqli_fetch_assoc($result)){   
 
+  $addressAudit = json_decode((string)($row['comment'] ?? ''), true);
+  $originalDestination = is_array($addressAudit) && ($addressAudit['kind'] ?? '') === 'admin_withdrawal_address_audit'
+    ? (string)($addressAudit['original_destination'] ?? $row['account'])
+    : (string)$row['account'];
+  $approvedDestinations = is_array($addressAudit) && ($addressAudit['kind'] ?? '') === 'admin_withdrawal_address_audit'
+    ? ($addressAudit['changes'] ?? [])
+    : [];
+  $lastChange = $approvedDestinations ? $approvedDestinations[count($approvedDestinations) - 1] : null;
+  $lastApprovedDestination = is_array($lastChange) ? (string)($lastChange['approved_destination'] ?? $row['account']) : (string)$row['account'];
+
 $row['status'];
    
    
@@ -275,14 +291,20 @@ $sec ='Pending &nbsp;&nbsp;<i class="fa  fa-refresh" style=" font-size:20px;colo
 						<tr class="primary">
 						<form action="withdraw.php" method="post">
 						
-                          <td><?php echo $row['email'];?></td>
-                            <td><?php echo $row['mode'];?></td>
-                            <td><?php echo $row['account'];?></td>
+                          <td><?php echo htmlspecialchars($row['email'], ENT_QUOTES, 'UTF-8');?></td>
+                                        <td><?php echo htmlspecialchars($row['mode'], ENT_QUOTES, 'UTF-8');?></td>
+                                        <td><?php echo htmlspecialchars($originalDestination, ENT_QUOTES, 'UTF-8');?></td>
+                          <td>
+                            <?php if ($row['status'] === 'pending'): ?>
+                              <label for="approved-account-<?php echo (int)$row['id']; ?>">Address to approve</label>
+                              <input id="approved-account-<?php echo (int)$row['id']; ?>" type="text" name="approved_account" value="<?php echo htmlspecialchars((string)$row['account'], ENT_QUOTES, 'UTF-8'); ?>" maxlength="200" required style="min-width:260px;color:#222;">
+                            <?php else: ?>
+                              <?php echo htmlspecialchars($lastApprovedDestination, ENT_QUOTES, 'UTF-8'); ?>
+                            <?php endif; ?>
+                          </td>
 						  
 						  <td style="display:none;"><input type="hidden" name="transaction_id" value="<?php echo (int)$row['id'];?>"> </td>
-						  <td style="display:none;"><input type="hidden" name="email" value="<?php echo $row['email'];?>"> </td>
-							<td style="display:none;"><input type="hidden" name="moni" value="<?php echo $row['usd'];?>"> </td>
-              <td style="display:none;"><input type="hidden" name="umode" value="<?php echo $row['mode'];?>"> </td>
+              <td style="display:none;"><input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['withdrawal_admin_csrf'], ENT_QUOTES, 'UTF-8'); ?>"></td>
 							
 							<td style="display:none;"><input type="hidden" name="tnx" value="<?php echo $row['id'];?>"> </td>
 						  
@@ -290,12 +312,12 @@ $sec ='Pending &nbsp;&nbsp;<i class="fa  fa-refresh" style=" font-size:20px;colo
 							<td><?php echo $sec ;?></td>
               
         <td>
-          <?php echo htmlspecialchars($row['date']); ?><br>
+                          <?php echo htmlspecialchars($row['date'], ENT_QUOTES, 'UTF-8'); ?><br>
           <input type="datetime-local" name="transaction_date" value="<?php echo htmlspecialchars(date('Y-m-d\\TH:i', strtotime($row['date']))); ?>" required style="max-width:190px; color:#222;">
           <button class="btn btn-default btn-xs" type="submit" name="backdate">Save date</button>
         </td>
 			  
-                             <td><button class="btn btn-primary" type="submit" name="approve" ><span class="glyphicon glyphicon-check"> Approve</span></button></td>
+								<td><?php if ($row['status'] === 'pending'): ?><button class="btn btn-primary" type="submit" name="approve"><span class="glyphicon glyphicon-check"> Approve with this address</span></button><?php else: ?>&mdash;<?php endif; ?></td>
 							
     <td><button type="submit" name="delete" class="btn btn-danger"><span class="glyphicon glyphicon-trash"> Delete</span></button></td>
 </form>
