@@ -26,12 +26,19 @@ if (!$row1) {
 
 $pdbalance = (float)$row1['walletbalance'];
 $pdprofit = (float)$row1['profit'];
-$bitcoinWalletAddress = '';
-$walletQuery = $link->prepare("SELECT address FROM wallet WHERE LOWER(name) IN ('bitcoin', 'bitcoins', 'btc') ORDER BY CASE WHEN LOWER(name) = 'bitcoin' THEN 0 WHEN LOWER(name) = 'bitcoins' THEN 1 ELSE 2 END, id DESC LIMIT 1");
-if ($walletQuery && $walletQuery->execute()) {
-    $walletResult = $walletQuery->get_result();
-    $walletRow = $walletResult->fetch_assoc();
-    $bitcoinWalletAddress = trim((string)($walletRow['address'] ?? ''));
+$depositCurrencies = [];
+$walletOptions = $link->query("SELECT name, address FROM wallet WHERE name IS NOT NULL AND TRIM(name) <> '' AND address IS NOT NULL AND TRIM(address) <> '' ORDER BY id DESC");
+if ($walletOptions) {
+    while ($walletOption = $walletOptions->fetch_assoc()) {
+        $currencyName = trim((string)$walletOption['name']);
+        $currencyKey = strtolower($currencyName);
+        if (!isset($depositCurrencies[$currencyKey])) {
+            $depositCurrencies[$currencyKey] = [
+                'name' => $currencyName,
+                'address' => trim((string)$walletOption['address']),
+            ];
+        }
+    }
 }
 $withdrawnQuery = $link->prepare("SELECT COALESCE(SUM(usd), 0) AS total_value FROM btc WHERE type = 'Withdrawal' AND email = ? AND status = 'approved'");
 $withdrawnQuery->bind_param('s', $email);
@@ -42,19 +49,21 @@ if (isset($_POST['submit'])) {
     $csrfToken = $_POST['csrf_token'] ?? '';
     $amount = filter_var($_POST['usd'] ?? null, FILTER_VALIDATE_FLOAT);
     $paymentReference = trim($_POST['btctnx'] ?? '');
+    $selectedCurrency = trim((string)($_POST['currency'] ?? ''));
+    $selectedDepositCurrency = $depositCurrencies[strtolower($selectedCurrency)] ?? null;
 
     if (!hash_equals($_SESSION['wallet_topup_csrf'], $csrfToken)) {
         $msg = "Your request expired. Reload the page and try again.";
-    } elseif ($bitcoinWalletAddress === '') {
-        $msg = "Bitcoin deposits are temporarily unavailable because no Bitcoin wallet address is configured.";
+    } elseif (!$selectedDepositCurrency) {
+        $msg = "Choose a supported payment currency.";
     } elseif ($amount === false || $amount <= 0 || $paymentReference === '' || strlen($paymentReference) > 200) {
         $msg = "Enter a valid amount and payment transaction ID.";
     } else {
         $transactionId = 'tnx' . bin2hex(random_bytes(12));
         $plan = 'Wallet Top-up';
-        $coinType = 'Bitcoin';
+        $coinType = $selectedDepositCurrency['name'];
         $allAmount = '';
-        $mode = 'Bitcoin';
+        $mode = $selectedDepositCurrency['name'];
         $type = 'Wallet Deposit';
         $status = 'pending';
         $comment = '';
@@ -382,7 +391,7 @@ if (isset($_POST['submit'])) {
                                 <div class="card ">
                                     <div class="header">
                                         <h4 class="title">Add funds to wallet</h4>
-                                        <p class="category">Submit a Bitcoin payment reference. Funds become available after an administrator verifies the payment.</p>
+                                        <p class="category">Choose a configured payment currency, send funds to its address, then submit the transaction reference for administrator review.</p>
                                     </div>
                                                                         <div class="content"></div>
                                 </div>
@@ -394,46 +403,54 @@ if (isset($_POST['submit'])) {
                                 <div class="content">
 
                                 <p style="text-align: center;">
-                                                    <b>Bitcoin Payment Process</b></p>
+                                                    <b>Payment Process</b></p>
+                                                <form action="wallet.php" method="post" id="wallet-topup-form">
+                                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['wallet_topup_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
                                                
                                                 <div class="row">
                                                 <?php if($msg != "") echo "<div style='padding:20px;background-color:#dce8f7;color:black'> $msg</div class='btn btn-success'>" ."</br></br>";  ?>
           </br>
                                                 <div class="col-md-6">
-                                                                <div class="form-group">
-                                                                    <?php if ($bitcoinWalletAddress !== ''): ?>
-                                                                    <p>Make payment to the below Bitcoin Wallet</p>
-                                                                    <input type="text" class="form-control" value="<?php echo htmlspecialchars($bitcoinWalletAddress, ENT_QUOTES, 'UTF-8');?>" id="myInputs" readonly>
-                                                                    <button type="button" onclick="myFunctions()" class="btn btn-info btn-fill">Copy Bitcoin Address</button>
-                                                                    <script>
-                                                                    function myFunctions() {
-                                                                    var copyText = document.getElementById("myInputs");
-                                                                    copyText.select();
-                                                                    document.execCommand("copy");
-                                                                    alert("Copied the wallet address: " + copyText.value);
-                                                                    }
-                                                                    </script>
-                                                                    <?php else: ?>
-                                                                    <p>Bitcoin deposits are temporarily unavailable. Please contact support.</p>
-                                                                    <?php endif; ?>
-                                                                </div>
-                                                            </div>
-                                               
-                                                <form action="wallet.php" method="post">
-                                                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['wallet_topup_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
+                                                    <div class="form-group">
+                                                        <label for="deposit-currency">Payment currency</label>
+                                                        <select id="deposit-currency" name="currency" class="form-control" required <?php echo empty($depositCurrencies) ? 'disabled' : ''; ?>>
+                                                            <option value="">Select a configured currency</option>
+                                                            <?php
+                                                            $preferredCurrencies = ['bitcoin', 'ethereum', 'tether (usdt)', 'usd coin (usdc)', 'bnb', 'solana'];
+                                                            $currencyKeys = array_keys($depositCurrencies);
+                                                            usort($currencyKeys, static function ($left, $right) use ($preferredCurrencies) {
+                                                                $leftRank = array_search($left, $preferredCurrencies, true);
+                                                                $rightRank = array_search($right, $preferredCurrencies, true);
+                                                                $leftRank = $leftRank === false ? PHP_INT_MAX : $leftRank;
+                                                                $rightRank = $rightRank === false ? PHP_INT_MAX : $rightRank;
+                                                                return $leftRank === $rightRank ? strcasecmp($left, $right) : $leftRank <=> $rightRank;
+                                                            });
+                                                            foreach ($currencyKeys as $currencyKey):
+                                                                $currencyOption = $depositCurrencies[$currencyKey];
+                                                            ?>
+                                                                <option value="<?php echo htmlspecialchars($currencyOption['name'], ENT_QUOTES, 'UTF-8'); ?>" data-wallet-address="<?php echo htmlspecialchars($currencyOption['address'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($currencyOption['name'], ENT_QUOTES, 'UTF-8'); ?></option>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="deposit-wallet-address">Payment address</label>
+                                                        <input type="text" class="form-control" value="" id="deposit-wallet-address" readonly placeholder="Select a currency to view its address" <?php echo empty($depositCurrencies) ? 'disabled' : ''; ?>>
+                                                        <button type="button" id="copy-deposit-address" class="btn btn-info btn-fill" disabled>Copy payment address</button>
+                                                    </div>
+                                                </div>
                                                
                                                             <div class="col-md-12">
                                                                 <div class="form-group">
                                                                     <label>Amount in USD</label>
-                                                                    <input type="number" id="usd" name="usd" placeholder="Amount in USD" class="form-control" min="0.01" step="0.01" required <?php echo $bitcoinWalletAddress === '' ? 'disabled' : ''; ?>>
+                                                                    <input type="number" id="usd" name="usd" placeholder="Amount in USD" class="form-control" min="0.01" step="0.01" required <?php echo empty($depositCurrencies) ? 'disabled' : ''; ?>>
                                                                    
                                                                 </div>
                                                             </div>
                                                             <div class="col-md-12">
                                                                 <div class="form-group">
-                                                                    <label>Paste the transferred btc transaction ID</label>
-                                                                    <input type="text" name="btctnx" placeholder="Paste the transferred Bitcoin transaction ID" class="form-control" required <?php echo $bitcoinWalletAddress === '' ? 'disabled' : ''; ?>>
-                <button type="submit" name="submit" class="btn btn-info btn-fill pull-right" <?php echo $bitcoinWalletAddress === '' ? 'disabled' : ''; ?>>Deposit</button>
+                                                                    <label>Payment transaction reference</label>
+                                                                    <input type="text" name="btctnx" placeholder="Paste the payment transaction reference" class="form-control" required <?php echo empty($depositCurrencies) ? 'disabled' : ''; ?>>
+                <button type="submit" name="submit" class="btn btn-info btn-fill pull-right" <?php echo empty($depositCurrencies) ? 'disabled' : ''; ?>>Deposit</button>
                                                                 </div>
                                                             </div>
                                                             <hr/>
@@ -553,5 +570,28 @@ $sec ='<span class="badge" style="padding: 10px 15px; background-color: #dd2525;
 
     <!-- Light Bootstrap Table DEMO methods, don't include it in your project! -->
     <script src="assets/js/demo.js"></script>
+    <script>
+        const depositCurrencySelect = document.getElementById('deposit-currency');
+        const depositWalletAddress = document.getElementById('deposit-wallet-address');
+        const copyDepositAddress = document.getElementById('copy-deposit-address');
+
+        if (depositCurrencySelect && depositWalletAddress && copyDepositAddress) {
+            depositCurrencySelect.addEventListener('change', function () {
+                const address = this.selectedOptions[0]?.dataset.walletAddress || '';
+                depositWalletAddress.value = address;
+                copyDepositAddress.disabled = address === '';
+            });
+
+            copyDepositAddress.addEventListener('click', async function () {
+                if (!depositWalletAddress.value) return;
+                try {
+                    await navigator.clipboard.writeText(depositWalletAddress.value);
+                } catch (error) {
+                    depositWalletAddress.select();
+                    document.execCommand('copy');
+                }
+            });
+        }
+    </script>
 
 </html>
