@@ -583,13 +583,35 @@ $sec ='<span class="badge" style="padding: 10px 15px; background-color: #dd2525;
             });
 
             copyDepositAddress.addEventListener('click', async function () {
-                if (!depositWalletAddress.value) return;
-                try {
-                    await navigator.clipboard.writeText(depositWalletAddress.value);
-                } catch (error) {
-                    depositWalletAddress.select();
-                    document.execCommand('copy');
+                const address = depositWalletAddress.value.trim();
+                if (!address) {
+                    window.alert('Choose a payment currency first.');
+                    return;
                 }
+
+                let copied = false;
+                try {
+                    if (navigator.clipboard && window.isSecureContext) {
+                        await navigator.clipboard.writeText(address);
+                        copied = true;
+                    }
+                } catch (error) {
+                    copied = false;
+                }
+
+                if (!copied) {
+                    depositWalletAddress.select();
+                    depositWalletAddress.setSelectionRange(0, address.length);
+                    try {
+                        copied = document.execCommand('copy');
+                    } catch (error) {
+                        copied = false;
+                    }
+                }
+
+                window.alert(copied
+                    ? 'Payment address copied to clipboard.'
+                    : 'Could not copy automatically. The address is selected; copy it manually.');
             });
         }
     </script>
