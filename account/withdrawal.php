@@ -44,47 +44,30 @@ if ($withdrawals) {
 $withdrawable = max(0, min($ubalance, $uprofit - (float)$withdrawnProfit));
 
 $currencyCatalog = [
-    'bitcoin' => 'Bitcoin (BTC)',
-    'ethereum' => 'Ethereum (ETH)',
-    'tether (usdt)' => 'Tether (USDT)',
-    'usd coin (usdc)' => 'USD Coin (USDC)',
-    'bnb' => 'BNB',
-    'solana' => 'Solana (SOL)',
-    'xrp' => 'XRP',
-    'dogecoin' => 'Dogecoin (DOGE)',
-    'cardano (ada)' => 'Cardano (ADA)',
-    'tron (trx)' => 'TRON (TRX)',
-    'litecoin' => 'Litecoin (LTC)',
-    'avalanche (avax)' => 'Avalanche (AVAX)',
-    'polkadot (dot)' => 'Polkadot (DOT)',
-    'chainlink (link)' => 'Chainlink (LINK)',
-    'toncoin (ton)' => 'Toncoin (TON)',
-    'polygon (pol)' => 'Polygon (POL)',
-];
-$currencyAliases = [
-    'btc' => 'bitcoin',
-    'bitcoins' => 'bitcoin',
-    'eth' => 'ethereum',
-    'usdt' => 'tether (usdt)',
-    'tether' => 'tether (usdt)',
-    'usdc' => 'usd coin (usdc)',
-    'ada' => 'cardano (ada)',
-    'trx' => 'tron (trx)',
-    'ltc' => 'litecoin',
-    'avax' => 'avalanche (avax)',
-    'dot' => 'polkadot (dot)',
-    'link' => 'chainlink (link)',
-    'ton' => 'toncoin (ton)',
-    'pol' => 'polygon (pol)',
+    'bitcoin' => ['value' => 'Bitcoin', 'label' => 'Bitcoin (BTC)'],
+    'ethereum' => ['value' => 'Ethereum', 'label' => 'Ethereum (ETH)'],
+    'tether (usdt)' => ['value' => 'Tether (USDT)', 'label' => 'Tether (USDT)'],
+    'usd coin (usdc)' => ['value' => 'USD Coin', 'label' => 'USD Coin (USDC)'],
+    'bnb' => ['value' => 'BNB', 'label' => 'BNB'],
+    'solana' => ['value' => 'Solana', 'label' => 'Solana (SOL)'],
+    'xrp' => ['value' => 'XRP', 'label' => 'XRP'],
+    'dogecoin' => ['value' => 'Dogecoin', 'label' => 'Dogecoin (DOGE)'],
+    'cardano (ada)' => ['value' => 'Cardano', 'label' => 'Cardano (ADA)'],
+    'tron (trx)' => ['value' => 'TRON', 'label' => 'TRON (TRX)'],
+    'litecoin' => ['value' => 'Litecoin', 'label' => 'Litecoin (LTC)'],
+    'avalanche (avax)' => ['value' => 'Avalanche', 'label' => 'Avalanche (AVAX)'],
+    'polkadot (dot)' => ['value' => 'Polkadot', 'label' => 'Polkadot (DOT)'],
+    'chainlink (link)' => ['value' => 'Chainlink', 'label' => 'Chainlink (LINK)'],
+    'toncoin (ton)' => ['value' => 'Toncoin', 'label' => 'Toncoin (TON)'],
+    'polygon (pol)' => ['value' => 'Polygon', 'label' => 'Polygon (POL)'],
 ];
 $configuredCurrencies = $link->query("SELECT DISTINCT name FROM wallet WHERE name IS NOT NULL AND TRIM(name) <> '' ORDER BY name");
 if ($configuredCurrencies) {
     while ($configuredCurrency = $configuredCurrencies->fetch_assoc()) {
         $currencyName = trim((string)$configuredCurrency['name']);
         $currencyKey = strtolower($currencyName);
-        $currencyKey = $currencyAliases[$currencyKey] ?? $currencyKey;
         if (!isset($currencyCatalog[$currencyKey])) {
-            $currencyCatalog[$currencyKey] = $currencyName;
+            $currencyCatalog[$currencyKey] = ['value' => $currencyName, 'label' => $currencyName];
         }
     }
 }
@@ -100,11 +83,10 @@ if(isset($_POST['send'])) {
     
     $requestedCurrency = trim((string)($_POST['currency'] ?? ''));
     $currencyKey = strtolower($requestedCurrency);
-    $currencyKey = $currencyAliases[$currencyKey] ?? $currencyKey;
     if ($requestedCurrency === '' || !isset($currencyCatalog[$currencyKey])) {
         $msg = "Currency is required";
     } else {
-        $mode = $currencyCatalog[$currencyKey];
+        $mode = $currencyCatalog[$currencyKey]['value'];
     }
     
     if (empty($_POST["wallet"])) {
@@ -416,8 +398,8 @@ if(mysqli_num_rows($result) > 0){
                                     <input type="search" id="currency-search" class="w-full px-4 py-2 form-input rounded mb-2" placeholder="Search currencies" autocomplete="off" aria-label="Search currencies">
                                     <select name="currency" class="w-full px-4 py-2 form-input rounded" required>
                                         <option value="">Select a currency</option>
-                                        <?php foreach ($currencyCatalog as $currencyName): ?>
-                                            <option value="<?php echo htmlspecialchars($currencyName, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($currencyName, ENT_QUOTES, 'UTF-8'); ?></option>
+                                        <?php foreach ($currencyCatalog as $currency): ?>
+                                            <option value="<?php echo htmlspecialchars($currency['value'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($currency['label'], ENT_QUOTES, 'UTF-8'); ?></option>
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
