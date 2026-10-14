@@ -79,7 +79,6 @@ if (isset($_POST['submit'])) {
 <!doctype html>
 <html lang="en">
     <head>
-        <meta charset="utf-8" />
         <link rel="icon" type="image/png" href="assets/img/favicon.ico">
         <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
 
@@ -89,6 +88,9 @@ if (isset($_POST['submit'])) {
         <meta name="viewport" content="width=device-width" />
 
 
+                                        $result = mysqli_query($link,$sql);
+                                        if(mysqli_num_rows($result) > 0){
+                                            $is_yes = 1;
         <!-- Bootstrap core CSS     -->
         <link href="assets/css/bootstrap.min.css" rel="stylesheet" />
 
@@ -361,7 +363,7 @@ if (isset($_POST['submit'])) {
 
                                     <div class="col-md-4">
                                         <div class="card">
-
+            <label>Amount in USD</label>
                                             <div class="header">
                                                 <h4 class="title">Total Earnings</h4>
                                                 <p class="category">total earnings so far</p>
