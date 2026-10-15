@@ -2,6 +2,7 @@
 session_start();
 include "../db.php";
 include "../config.php";
+require_once "../risk.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -22,6 +23,11 @@ if(isset($_SESSION['email'])){
     header('location: ../login.php');
     die();
 }
+
+$row1 = redman_risk_refresh_hold($link, $email) ?: $row1;
+$accountOnHold = !empty($row1['is_on_hold']);
+$ubalance = round((float)$row1['walletbalance'], 2);
+$uprofit = round((float)$row1['profit'], 2);
 
 function test_input($data) {
     $data = trim($data);
@@ -186,6 +192,13 @@ function test_input($data) {
 
         <!-- Content -->
         <main class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+            <?php if ($accountOnHold): ?>
+                <div class="mb-6 border-l-4 border-yellow-400 bg-yellow-900/30 p-4" role="status">
+                    <h2 class="font-semibold text-yellow-200">Investments paused for risk review</h2>
+                    <p class="text-gray-200">No earnings are accruing during the hold. Vault balance: $<?php echo number_format((float)$row1['vault_balance'], 2); ?>.</p>
+                    <p class="text-gray-300"><?php echo !empty($row1['hold_release_date']) ? 'Scheduled release: ' . htmlspecialchars($row1['hold_release_date'], ENT_QUOTES, 'UTF-8') : 'KYC verification and approved transaction-volume requirements are still pending.'; ?></p>
+                </div>
+            <?php endif; ?>
             <div class="card p-6 mb-6">
                 <h2 class="text-xl font-bold text-primary mb-4 text-center">My Investment Portfolio</h2>
                 
@@ -205,9 +218,9 @@ function test_input($data) {
                         <tbody>
                             <?php 
                             // Auto-sync approved deposits into investment table if missing
-                            $sync_sql = "SELECT * FROM btc WHERE email = '$email' AND status = 'approved' AND type = 'Deposit'";
+                            $sync_sql = "SELECT * FROM btc WHERE email = '$email' AND status = 'approved' AND risk_held = 0 AND type = 'Deposit'";
                             $sync_res = mysqli_query($link, $sync_sql);
-                            if ($sync_res && mysqli_num_rows($sync_res) > 0) {
+                            if (!$accountOnHold && $sync_res && mysqli_num_rows($sync_res) > 0) {
                                 while ($dep = mysqli_fetch_assoc($sync_res)) {
                                     $dep_usd = (float)$dep['usd'];
                                     $dep_account = $link->real_escape_string($dep['account']);
@@ -250,15 +263,13 @@ function test_input($data) {
                                     $activate = (int)$row['activate'];
                                     $lprofit = (float)$row['lprofit'];
                                     
-                                    $start_ts = strtotime($pdate);
-                                    if ($start_ts === false || $start_ts <= 0) {
-                                        $start_ts = time();
-                                    }
-                                    $end_ts = $start_ts + ($duration * 86400);
-                                    $end_date_str = date('Y/m/d', $end_ts);
                                     $now = time();
+                                    $timing = redman_risk_investment_timing($row, $now);
+                                    $start_ts = $timing['started_at'];
+                                    $end_ts = $timing['ends_at'];
+                                    $end_date_str = date('Y/m/d', $end_ts);
                                     
-                                    if($activate == 1){
+                                    if($activate == 1 && !$accountOnHold){
                                         if($now >= $end_ts){
                                             // Investment completed
                                             $final_profit = round(($increase / 100) * $usd * $duration, 2);
@@ -273,8 +284,8 @@ function test_input($data) {
                                             $sec = '<span class="status-completed"><i class="fas fa-check-circle mr-1"></i> Completed</span>';
                                         } else {
                                             // Active investment - calculate continuous real-time profit
-                                            $elapsed_secs = max(0, $now - $start_ts);
-                                            $elapsed_days = min((float)$duration, $elapsed_secs / 86400);
+                                            $elapsed_secs = $timing['elapsed_seconds'];
+                                            $elapsed_days = $timing['elapsed_days'];
                                             $current_profit = round(($increase / 100) * $usd * $elapsed_days, 2);
                                             $days_left = max(0, (int)ceil(($end_ts - $now) / 86400));
                                             
@@ -286,6 +297,10 @@ function test_input($data) {
                                             
                                             $sec = '<span class="status-active"><i class="fas fa-sync-alt fa-spin mr-1 text-green-400"></i> Active</span>';
                                         }
+                                    } elseif($activate == 1) {
+                                        $current_profit = (float)$row['lprofit'];
+                                        $days_left = $timing['days_remaining'];
+                                        $sec = '<span class="status-active">Paused for risk review</span>';
                                     } else {
                                         $current_profit = (float)$row['profit'];
                                         $days_left = 0;

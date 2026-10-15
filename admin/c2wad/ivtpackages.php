@@ -3,6 +3,7 @@ session_start();
 
 
 include "../../conn.php";
+require_once "../../risk.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -35,11 +36,16 @@ if(isset($_POST['stop'])){
 if(isset($_POST['start'])){
     $uemail = $link->real_escape_string($_POST['email']);
     $uid = $link->real_escape_string($_POST['uid']);
-    $sql1 = "UPDATE investment SET activate = '1' WHERE id='$uid'";
-    if(mysqli_query($link, $sql1)){
+  $holdCheck = $link->prepare('SELECT is_on_hold FROM users WHERE email = ? LIMIT 1');
+  $holdCheck->bind_param('s', $uemail);
+  $holdCheck->execute();
+  $holdRow = $holdCheck->get_result()->fetch_assoc();
+  $holdCheck->close();
+  $sql1 = "UPDATE investment SET activate = '1', risk_paused_at = IF((SELECT is_on_hold FROM users WHERE email = '$uemail' LIMIT 1) = 1, NOW(), NULL) WHERE id='$uid' AND email='$uemail'";
+  if ($holdRow && (int)$holdRow['is_on_hold'] === 0 && mysqli_query($link, $sql1)){
         $msg = "Investment successfully activated!";
     } else {
-        $msg = "Failed to activate investment!";
+    $msg = $holdRow && (int)$holdRow['is_on_hold'] === 1 ? "A held account's investment cannot be activated." : "Failed to activate investment!";
     }
 }
 
@@ -145,6 +151,13 @@ include 'header.php';
 					<tbody>
 					    <?php
 $sql= "SELECT * FROM investment ORDER BY id DESC ";
+        $holdStatuses = [];
+        $holdResult = $link->query('SELECT email, is_on_hold FROM users');
+        if ($holdResult) {
+            while ($holdStatus = $holdResult->fetch_assoc()) {
+                $holdStatuses[$holdStatus['email']] = (int)$holdStatus['is_on_hold'];
+            }
+        }
 			  $result = mysqli_query($link,$sql);
 			  if(mysqli_num_rows($result) > 0){
 				  while($row = mysqli_fetch_assoc($result)){   
@@ -155,6 +168,8 @@ $sql= "SELECT * FROM investment ORDER BY id DESC ";
  $usd = $row['usd'];
   $uid = $row['id'];
   $email = $row['email'];
+            $isUserHeld = !empty($holdStatuses[$email]);
+            $riskTiming = redman_risk_investment_timing($row);
 					 
 $date = $row['pdate'];
 $payday = $row['payday'];
@@ -169,17 +184,12 @@ $paypackage = new DateTime($payday);
 			if(isset($row['pdate']) &&  $row['pdate'] != '0' && isset($row['duration'])  && isset($row['increase'])  && isset($row['usd']) ){
 			    
 			    if($row['activate'] == 0){
-			        $endpackage = new DateTime($pdate);
-          $endpackage->modify( '+ '.$duration. 'day');
- $Date2 = $endpackage->format('Y/m/d');
+ $Date2 = date('Y/m/d', $riskTiming['ends_at']);
  $days=0;
 			    }else{
 			        
 			    
-         
-          $endpackage = new DateTime($pdate);
-          $endpackage->modify( '+ '.$duration. 'day');
- $Date2 = $endpackage->format('Y/m/d');
+ $Date2 = date('Y/m/d', $riskTiming['ends_at']);
  $current=date("Y/m/d");
 
  $diff = abs(strtotime($Date2) - strtotime($current));
@@ -192,7 +202,7 @@ $paypackage = new DateTime($payday);
   $days=floor($diff / (60*60*24));
  
  
-$daily = $duration - $days;
+$daily = $riskTiming['elapsed_days'];
 
 
 
@@ -202,7 +212,7 @@ $f = date('Y-m-d', strtotime($Date2 . ' + '. $one.'day'));
 
 
 
-if(isset($days) && $days == 0 || $Date2 == (date("Y/m/d")) || (date("Y/m/d")) >= $Date2  ){
+if(!$isUserHeld && ((isset($days) && $days == 0) || $Date2 == (date("Y/m/d")) || (date("Y/m/d")) >= $Date2)){
     
     
     $percentage = ($increase/100) * $duration * $usd;
@@ -234,7 +244,7 @@ if(isset($days) && $days == 0 || $Date2 == (date("Y/m/d")) || (date("Y/m/d")) >=
   }
 }else{
     
-    if($payday == $current){
+    if($isUserHeld || $payday == $current){
         
     }else{
         

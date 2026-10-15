@@ -137,6 +137,7 @@
           <ul class="treeview-menu">
             <li><a href="users.php"><i class="fa fa-users"></i> View Investors</a></li>
             <li><a href="edit.php"><i class="fa fa-users"></i> Manage Users</a></li>
+            <li><a href="risk_management.php"><i class="fa fa-shield"></i> Risk &amp; KYC</a></li>
             <li><a href="ivtpackages.php"><i class="fa fa-archive"></i> Investors Investment </a></li>
             <li><a href="edit_investment.php"><i class="fa fa-plus-circle"></i> Add Manual Investment</a></li>
             

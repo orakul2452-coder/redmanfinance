@@ -77,7 +77,7 @@ else{
       
           
         
-      $sql1 = "UPDATE users SET username='$username', email='$emails',password='$password', walletbalance='$walletbalance', refbonus='$refbonus', refcode='$refcode', profit='$profit', pname='$pname', phone='$phone', country='$country', address='$address'       WHERE email='$email'";
+      $sql1 = "UPDATE users SET username='$username', email='$emails',password='$password', walletbalance=IF(is_on_hold = 1, walletbalance, '$walletbalance'), refbonus='$refbonus', refcode='$refcode', profit='$profit', pname='$pname', phone='$phone', country='$country', address='$address'       WHERE email='$email'";
       
       if (mysqli_query($link, $sql1)) {
           $msg = "Account Details Edited Successfully!";

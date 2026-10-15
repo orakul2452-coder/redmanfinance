@@ -2,6 +2,7 @@
 session_start();
 
 include "../../conn.php";
+require_once "../../risk.php";
 
 if (!isset($_SESSION['uid'])) {
     header("location:../c2wadmin/signin.php");
@@ -26,7 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['approve'])) {
         $link->begin_transaction();
 
         try {
-            $select = $link->prepare("SELECT email, usd FROM btc WHERE id = ? AND type = 'Wallet Deposit' AND status = 'pending' FOR UPDATE");
+            $select = $link->prepare("SELECT id, email, usd FROM btc WHERE id = ? AND type = 'Wallet Deposit' AND status = 'pending' FOR UPDATE");
             $select->bind_param('i', $transactionId);
             $select->execute();
             $result = $select->get_result();
@@ -36,6 +37,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['approve'])) {
                 throw new RuntimeException("This wallet top-up is missing, already processed, or invalid.");
             }
 
+            $userSelect = $link->prepare('SELECT * FROM users WHERE email = ? LIMIT 1 FOR UPDATE');
+            $userSelect->bind_param('s', $deposit['email']);
+            $userSelect->execute();
+            $user = $userSelect->get_result()->fetch_assoc();
+            $userSelect->close();
+            if (!$user) {
+                throw new RuntimeException("The investor account could not be found.");
+            }
+
+            $riskDecision = redman_risk_deposit_must_be_held($link, $user, $deposit['usd']);
+            if ($riskDecision['hold'] === null) {
+                throw new RuntimeException($riskDecision['reason']);
+            }
+
+            if ($riskDecision['hold']) {
+                if (!redman_risk_start_hold($link, $user, $deposit['usd'], $riskDecision['reason'], (int)$_SESSION['uid'])) {
+                    throw new RuntimeException("The account hold could not be recorded.");
+                }
+                $approve = $link->prepare("UPDATE btc SET status = 'approved', risk_held = 1 WHERE id = ? AND type = 'Wallet Deposit' AND status = 'pending'");
+                $approve->bind_param('i', $transactionId);
+                $approve->execute();
+                if ($approve->affected_rows !== 1) {
+                    throw new RuntimeException("The wallet top-up status could not be updated.");
+                }
+                $link->commit();
+                $msg = "Wallet top-up approved into the account vault. Spending remains restricted pending risk review.";
+            } else {
             $credit = $link->prepare("UPDATE users SET walletbalance = walletbalance + ? WHERE email = ?");
             $credit->bind_param('ds', $deposit['usd'], $deposit['email']);
             $credit->execute();
@@ -52,6 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['approve'])) {
 
             $link->commit();
             $msg = "Wallet top-up approved and credited.";
+            }
         } catch (Throwable $error) {
             $link->rollback();
             $msg = $error->getMessage();

@@ -3,6 +3,7 @@ session_start();
 
 include "../../conn.php";
 include "../../config.php";
+require_once "../../risk.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -79,6 +80,80 @@ if(isset($_POST['approve'])){
 	if(isset($row_btc['status']) && $row_btc['status'] == "approved"){
 		$msg = "Transaction already approved!";
 	} else {
+		$riskHandled = false;
+		if (!$row_btc) {
+			$msg = "Deposit request could not be found; approval was not applied.";
+			$riskHandled = true;
+		} else {
+			$link->begin_transaction();
+			$depositId = (int)$row_btc['id'];
+			$transactionLock = $link->prepare("SELECT * FROM btc WHERE id = ? AND type = 'Deposit' FOR UPDATE");
+			$transactionLock->bind_param('i', $depositId);
+			$transactionLock->execute();
+			$row_btc = $transactionLock->get_result()->fetch_assoc();
+			$transactionLock->close();
+			if (!$row_btc || $row_btc['status'] === 'approved') {
+				$link->rollback();
+				$msg = "Transaction already approved or unavailable.";
+				$riskHandled = true;
+			} else {
+				$tnx = $row_btc['tnxid'];
+				$usd = (float)$row_btc['usd'];
+				$email = $row_btc['email'];
+				$investplan = $row_btc['account'];
+				$cointype = $row_btc['cointype'];
+				$referred = $row_btc['referred'];
+				$increase = 1.5;
+				$bonus = 0;
+				$duration = 7;
+				$froms = $usd;
+				$package = $link->prepare("SELECT increase, bonus, duration, froms FROM package1 WHERE pname = ? OR ? LIKE CONCAT('%', pname, '%') OR pname LIKE CONCAT('%', ?, '%') LIMIT 1");
+				$package->bind_param('sss', $investplan, $investplan, $investplan);
+				$package->execute();
+				$packageRow = $package->get_result()->fetch_assoc();
+				$package->close();
+				if ($packageRow) {
+					$increase = (float)$packageRow['increase'];
+					$bonus = (float)$packageRow['bonus'];
+					$duration = (int)$packageRow['duration'];
+					$froms = (float)$packageRow['froms'];
+				}
+				$riskUserQuery = $link->prepare('SELECT * FROM users WHERE email = ? LIMIT 1 FOR UPDATE');
+				$riskUserQuery->bind_param('s', $email);
+				$riskUserQuery->execute();
+				$riskUser = $riskUserQuery->get_result()->fetch_assoc();
+				$riskUserQuery->close();
+				if (!$riskUser) {
+					$link->rollback();
+					$msg = "Investor account could not be found; approval was not applied.";
+					$riskHandled = true;
+				} else {
+					$userwallebalance = (float)$riskUser['walletbalance'];
+					$usernamewtc = $riskUser['username'];
+					$riskDecision = redman_risk_deposit_must_be_held($link, $riskUser, $usd);
+					if ($riskDecision['hold'] === null) {
+						$link->rollback();
+						$msg = $riskDecision['reason'] . "; approval was not applied.";
+						$riskHandled = true;
+					} elseif ($riskDecision['hold']) {
+						$held = redman_risk_start_hold($link, $riskUser, $usd, $riskDecision['reason'], (int)$_SESSION['uid']);
+						$holdDeposit = $link->prepare("UPDATE btc SET status = 'approved', risk_held = 1 WHERE id = ? AND type = 'Deposit' AND status <> 'approved'");
+						$holdDepositOk = $held && $holdDeposit && $holdDeposit->bind_param('i', $depositId) && $holdDeposit->execute() && $holdDeposit->affected_rows === 1;
+						if ($holdDeposit) {
+							$holdDeposit->close();
+						}
+						if ($holdDepositOk && $link->commit()) {
+							$msg = "Deposit approved into the account vault. No investment or referral credit was created while the account is held.";
+						} else {
+							$link->rollback();
+							$msg = "Unable to record the account hold; the deposit was not approved.";
+						}
+						$riskHandled = true;
+					}
+				}
+			}
+		}
+		if (!$riskHandled) {
 		$cpayday = date('Y/m/d');
 		$sql22 = "INSERT INTO investment (email,pname,increase,bonus,duration,pdate,froms,activate,usd,profit,payday,lprofit,status)
 				  VALUES ('$email','$investplan','$increase','$bonus','$duration','$cdate','$froms','1','$usd','0','$cpayday','0','')";
@@ -92,26 +167,30 @@ if(isset($_POST['approve'])){
 			$refb = ($usd / 100) * 4;
 			$exp_ref = explode("_", $referred);
 			$exp_refe = $exp_ref['0'];
-			mysqli_query($link, "UPDATE users SET refbonus = refbonus + $refb, walletbalance = walletbalance + $refb WHERE refcode = '$exp_refe'");
+			mysqli_query($link, "UPDATE users SET refbonus = refbonus + $refb, walletbalance = IF(is_on_hold = 1, walletbalance, walletbalance + $refb), vault_balance = IF(is_on_hold = 1, vault_balance + $refb, vault_balance) WHERE refcode = '$exp_refe'");
 			if(array_key_exists("1", $exp_ref)){
 				$refb = ($usd / 100) * 2;
 				$exp_refe1 = $exp_ref['1'];
-				mysqli_query($link, "UPDATE users SET refbonus = refbonus + $refb, walletbalance = walletbalance + $refb WHERE refcode = '$exp_refe1'");
+				mysqli_query($link, "UPDATE users SET refbonus = refbonus + $refb, walletbalance = IF(is_on_hold = 1, walletbalance, walletbalance + $refb), vault_balance = IF(is_on_hold = 1, vault_balance + $refb, vault_balance) WHERE refcode = '$exp_refe1'");
 			}
 			if(array_key_exists("2", $exp_ref)){
 				$refb = ($usd / 100) * 1;
 				$exp_refe2 = $exp_ref['2'];
-				mysqli_query($link, "UPDATE users SET refbonus = refbonus + $refb, walletbalance = walletbalance + $refb WHERE refcode = '$exp_refe2'");
+				mysqli_query($link, "UPDATE users SET refbonus = refbonus + $refb, walletbalance = IF(is_on_hold = 1, walletbalance, walletbalance + $refb), vault_balance = IF(is_on_hold = 1, vault_balance + $refb, vault_balance) WHERE refcode = '$exp_refe2'");
 			}
 		}
 
 		$dbbalance = $userwallebalance + $usd; 
-		mysqli_query($link, "UPDATE btc SET status = 'approved' WHERE tnxid = '$tnx'");
+		mysqli_query($link, "UPDATE btc SET status = 'approved', risk_held = 0 WHERE id = '$depositId' AND status <> 'approved'");
 		mysqli_query($link, "UPDATE users SET walletbalance = '$dbbalance' WHERE email = '$email'");
+		if (!$link->commit()) {
+			$link->rollback();
+			$msg = "Unable to commit deposit approval.";
+		} else {
 
 		$msg = "Transaction approved successfully and investor investment is now active!";
 
-    if($msg = "Transaction approved successfully and investor investment is now active!"){
+    if($msg === "Transaction approved successfully and investor investment is now active!"){
     
     
 		    
@@ -174,6 +253,8 @@ Your deposit of '.$usd.' USD worth of '.$cointype.' has been approved. Thank for
 
 		
 }
+		}
+		}
 
 }
 

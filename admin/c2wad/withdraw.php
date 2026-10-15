@@ -3,6 +3,7 @@ session_start();
 
 include "../../conn.php";
 include "../../config.php";
+require_once "../../risk.php";
 
 if(!isset($_SESSION['uid'])){
 	header("location:../c2wadmin/signin.php");
@@ -62,6 +63,18 @@ if (isset($_POST['approve'])) {
 
       if (!$withdrawal || $withdrawal['status'] !== 'pending') {
         throw new RuntimeException("This withdrawal is missing or has already been processed.");
+      }
+
+      $accountLock = $link->prepare('SELECT is_on_hold FROM users WHERE email = ? LIMIT 1 FOR UPDATE');
+      if (!$accountLock) {
+        throw new RuntimeException("Unable to verify the investor's account status.");
+      }
+      $accountLock->bind_param('s', $withdrawal['email']);
+      $accountLock->execute();
+      $accountStatus = $accountLock->get_result()->fetch_assoc();
+      $accountLock->close();
+      if (!$accountStatus || (int)$accountStatus['is_on_hold'] === 1) {
+        throw new RuntimeException("This withdrawal cannot be approved while the investor account is on hold.");
       }
 
       $originalAddress = trim((string)$withdrawal['account']);

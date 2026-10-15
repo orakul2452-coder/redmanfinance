@@ -51,6 +51,18 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
     $duration = (int)$_POST['duration'];
     $profit = (float)$_POST['profit'];
     $activate = (int)$_POST['activate'];
+    $riskBlockedActivation = false;
+    if ($activate === 1) {
+      $holdCheck = $link->prepare('SELECT is_on_hold FROM users WHERE email = ? LIMIT 1');
+      $holdCheck->bind_param('s', $email);
+      $holdCheck->execute();
+      $holdState = $holdCheck->get_result()->fetch_assoc();
+      $holdCheck->close();
+      if ($holdState && (int)$holdState['is_on_hold'] === 1) {
+        $activate = 0;
+        $riskBlockedActivation = true;
+      }
+    }
     
     if(isset($_POST['id']) && !empty($_POST['id'])){
         // Update existing investment
@@ -65,7 +77,7 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
                         activate = '$activate' 
                        WHERE id = '$mid'";
         if(mysqli_query($link, $sql_update)){
-            $msg = "Investment updated successfully!";
+            $msg = $riskBlockedActivation ? "Investment saved inactive because the investor is on hold." : "Investment updated successfully!";
             $is_edit = true;
             $id = $mid;
         } else {
@@ -78,7 +90,7 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
         $sql_insert = "INSERT INTO investment (email, pname, increase, bonus, duration, pdate, froms, activate, usd, profit, payday, lprofit, status)
                        VALUES ('$email', '$pname', '$increase', '0', '$duration', '$cdate', '$usd', '$activate', '$usd', '$profit', '$cpayday', '0', '')";
         if(mysqli_query($link, $sql_insert)){
-            $msg = "New investment added successfully!";
+            $msg = $riskBlockedActivation ? "Investment added inactive because the investor is on hold." : "New investment added successfully!";
         } else {
             $msg = "Failed to add investment: " . mysqli_error($link);
         }

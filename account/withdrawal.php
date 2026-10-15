@@ -2,6 +2,7 @@
 session_start();
 include "../db.php";
 include "../config.php";
+require_once "../risk.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -30,6 +31,12 @@ if(isset($_SESSION['email'])){
     header('location: ../trade/login.php');
     die();
 }
+
+$row1 = redman_risk_refresh_hold($link, $email) ?: $row1;
+$accountOnHold = !empty($row1['is_on_hold']);
+$minimumWithdrawal = (float)(redman_risk_settings($link)['min_withdrawal_amount'] ?? 100);
+$ubalance = round((float)$row1['walletbalance'], 2);
+$uprofit = round((float)$row1['profit'], 2);
 
 $withdrawnProfit = 0;
 $withdrawals = $link->prepare("SELECT COALESCE(SUM(usd), 0) FROM btc WHERE email = ? AND type = 'Withdrawal' AND status IN ('pending', 'approved')");
@@ -95,16 +102,20 @@ if(isset($_POST['send'])) {
         $wallet = $link->real_escape_string($_POST["wallet"]);
     }
 
-    if ($msg === '' && $amount < 7) {
-        $msg = "Minimum withdrawal is $7!";
+    if ($accountOnHold) {
+        $msg = "Withdrawals are unavailable while your account is under risk review.";
+    }
+    if ($msg === '' && $amount < $minimumWithdrawal) {
+        $msg = "Minimum withdrawal is $" . number_format($minimumWithdrawal, 2) . "!";
     }
     if ($msg === '') {
         $tnx = uniqid('tnx');
         $link->begin_transaction();
         $lockedBalance = 0;
         $lockedProfit = 0;
-        $lock = $link->prepare("SELECT walletbalance, profit FROM users WHERE email = ? FOR UPDATE");
-        $locked = $lock && $lock->bind_param('s', $email) && $lock->execute() && $lock->bind_result($lockedBalance, $lockedProfit) && $lock->fetch();
+        $lockedIsOnHold = 0;
+        $lock = $link->prepare("SELECT walletbalance, profit, is_on_hold FROM users WHERE email = ? FOR UPDATE");
+        $locked = $lock && $lock->bind_param('s', $email) && $lock->execute() && $lock->bind_result($lockedBalance, $lockedProfit, $lockedIsOnHold) && $lock->fetch();
         if ($lock) {
             $lock->close();
         }
@@ -117,7 +128,10 @@ if(isset($_POST['send'])) {
         }
 
         $currentWithdrawable = max(0, min((float)$lockedBalance, (float)$lockedProfit - (float)$lockedWithdrawnProfit));
-        if (!$withdrawalsLoaded || $amount > $currentWithdrawable) {
+        if ($locked && (int)$lockedIsOnHold === 1) {
+            $link->rollback();
+            $msg = "Withdrawals are unavailable while your account is under risk review.";
+        } elseif (!$withdrawalsLoaded || $amount > $currentWithdrawable) {
             $link->rollback();
             $msg = $withdrawalsLoaded ? "Insufficient Fund!" : "Unable to verify withdrawal balance. Please try again.";
         }
@@ -388,9 +402,9 @@ if(mysqli_num_rows($result) > 0){
                             <div class="space-y-4">
                                 <div>
                                     <label class="block text-gray-300 mb-2">Amount ($)</label>
-                                    <input type="number" name="amount" step="0.01" min="7" 
+                                    <input type="number" name="amount" step="0.01" min="<?php echo htmlspecialchars(number_format($minimumWithdrawal, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>"
                                            class="w-full px-4 py-2 form-input rounded" 
-                                           placeholder="Minimum $7" required>
+                                         placeholder="Minimum $<?php echo number_format($minimumWithdrawal, 2); ?>" required>
                                 </div>
                                 
                                 <div>
@@ -427,7 +441,7 @@ if(mysqli_num_rows($result) > 0){
             <div class="card p-6">
                 <h2 class="text-xl font-bold text-primary mb-4">Withdrawal Information</h2>
                 <div class="space-y-2 text-gray-300">
-                    <p><i class="fas fa-info-circle text-primary mr-2"></i> Minimum withdrawal amount: $7</p>
+                    <p><i class="fas fa-info-circle text-primary mr-2"></i> Minimum withdrawal amount: $<?php echo number_format($minimumWithdrawal, 2); ?></p>
                     <p><i class="fas fa-clock text-primary mr-2"></i> Processing time: Up to 12 hours</p>
                     <p><i class="fas fa-exclamation-triangle text-primary mr-2"></i> Ensure your wallet address is correct before submitting</p>
                 </div>

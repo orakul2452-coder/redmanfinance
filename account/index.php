@@ -8,6 +8,7 @@ session_start();
 
 include "../db.php";
 include "../config.php";
+require_once "../risk.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -41,6 +42,10 @@ if(isset($_SESSION['email'])){
     die();
 }
 
+$row1 = redman_risk_refresh_hold($link, $email) ?: $row1;
+$accountOnHold = !empty($row1['is_on_hold']);
+$ubalance = round((float)$row1['walletbalance'], 2);
+$uprofit = round((float)$row1['profit'], 2);
 
 
 $pdbalance = 0;
@@ -64,14 +69,12 @@ if(mysqli_num_rows($result) > 0){
         $activate = (int)$row['activate'];
         $lprofit = (float)$row['lprofit'];
         
-        $start_ts = strtotime($pdate);
-        if ($start_ts === false || $start_ts <= 0) {
-            $start_ts = time();
-        }
-        $end_ts = $start_ts + ($duration * 86400);
         $now = time();
+        $timing = redman_risk_investment_timing($row, $now);
+        $start_ts = $timing['started_at'];
+        $end_ts = $timing['ends_at'];
         
-        if($activate == 1){
+        if($activate == 1 && !$accountOnHold){
             if($now >= $end_ts){
                 $final_profit = round(($increase / 100) * $usd * $duration, 2);
                 $incremental_profit = max(0, $final_profit - $lprofit);
@@ -80,8 +83,8 @@ if(mysqli_num_rows($result) > 0){
                 mysqli_query($link, "UPDATE users SET walletbalance = walletbalance + $ppr, profit = profit + $incremental_profit WHERE email='$email'");
                 mysqli_query($link, "UPDATE investment SET activate = '0', profit = '$final_profit', lprofit = '$final_profit', payday = '".date('Y/m/d')."' WHERE id = '$uid'");
             } else {
-                $elapsed_secs = max(0, $now - $start_ts);
-                $elapsed_days = min((float)$duration, $elapsed_secs / 86400);
+                $elapsed_secs = $timing['elapsed_seconds'];
+                $elapsed_days = $timing['elapsed_days'];
                 $current_profit = round(($increase / 100) * $usd * $elapsed_days, 2);
                 
                 $incremental_profit = max(0, $current_profit - $lprofit);
@@ -261,6 +264,13 @@ $wbtc1 = 0;
 
         <!-- Content -->
         <main class="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+            <?php if ($accountOnHold): ?>
+                <div class="mb-6 border-l-4 border-yellow-400 bg-yellow-900/30 p-4" role="status">
+                    <h2 class="font-semibold text-yellow-200">Account under risk review</h2>
+                    <p class="text-gray-200">Earnings and account transactions are paused. Vault balance: $<?php echo number_format((float)$row1['vault_balance'], 2); ?>.</p>
+                    <p class="text-gray-300"><?php echo !empty($row1['hold_release_date']) ? 'Scheduled release: ' . htmlspecialchars($row1['hold_release_date'], ENT_QUOTES, 'UTF-8') : 'Complete KYC review and approved transaction-volume requirements before the release period can begin.'; ?></p>
+                </div>
+            <?php endif; ?>
             <!-- Stats Cards -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 <div class="card p-6">

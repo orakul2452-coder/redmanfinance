@@ -15,6 +15,7 @@ use PHPMailer\PHPMailer\Exception;
 session_start();
 include "../db.php";
 include "../config.php";
+require_once "../risk.php";
 
 $msg = "";
 
@@ -38,6 +39,9 @@ if(isset($_SESSION['email'])){
     die();
 }
 
+$row1 = redman_risk_refresh_hold($link, $email) ?: $row1;
+$accountOnHold = !empty($row1['is_on_hold']);
+
 $pname = "";
 $amount = "";
 $currency = "";
@@ -60,38 +64,50 @@ if(isset($_POST['submit'])){
     }
     
     if ($currency == "Account Wallet Balance") {
-        $user_q = mysqli_query($link, "SELECT walletbalance FROM users WHERE email = '$email' LIMIT 1");
-        $user_row = ($user_q && mysqli_num_rows($user_q) > 0) ? mysqli_fetch_assoc($user_q) : null;
-        $avail_bal = $user_row ? (float)$user_row['walletbalance'] : 0;
-        
-        if ($avail_bal < $amount) {
-            echo "<script> 
-                alert('Insufficient wallet balance! Your available balance is $".number_format($avail_bal, 2)."');
-                window.location.href='packages.php';
-            </script>";
+        $link->begin_transaction();
+        $userLock = $link->prepare('SELECT id, walletbalance, is_on_hold FROM users WHERE email = ? LIMIT 1 FOR UPDATE');
+        $userLock->bind_param('s', $email);
+        $userLock->execute();
+        $lockedUser = $userLock->get_result()->fetch_assoc();
+        $userLock->close();
+        if (!$lockedUser || (int)$lockedUser['is_on_hold'] === 1) {
+            $link->rollback();
+            echo "<script>alert('Wallet-funded investments are unavailable while your account is under risk review.'); window.location.href='packages.php';</script>";
             exit();
         }
-        
-        // Instant activation from wallet balance
+
+        $amountValue = (float)$amount;
+        $avail_bal = (float)$lockedUser['walletbalance'];
+        if ($amountValue <= 0 || $avail_bal < $amountValue) {
+            $link->rollback();
+            echo "<script>alert('Insufficient wallet balance! Your available balance is $".number_format($avail_bal, 2)."'); window.location.href='packages.php';</script>";
+            exit();
+        }
+
         $cdate = date('Y-m-d H:i:s');
         $cpayday = date('Y/m/d');
-        $ins_sql = "INSERT INTO investment (email, pname, increase, bonus, duration, pdate, froms, activate, usd, profit, payday, lprofit, status)
-                    VALUES ('$email', '$pname', '$uincrease', '0', '$uduration', '$cdate', '$ufrom', '1', '$amount', '0', '$cpayday', '0', '')";
-        if (mysqli_query($link, $ins_sql)) {
-            mysqli_query($link, "UPDATE users SET walletbalance = walletbalance - $amount WHERE email = '$email'");
-            echo "<script> 
-                alert('Investment of $".number_format($amount, 2)." in ".$pname." activated successfully from your wallet balance!');
-                window.location.href='mypackages.php';
-            </script>";
-            exit();
-        } else {
-            $err = addslashes(mysqli_error($link));
-            echo "<script> 
-                alert('Failed to activate investment: ".$err."');
-                window.location.href='packages.php';
-            </script>";
+        $increaseValue = (float)$uincrease;
+        $durationValue = (int)$uduration;
+        $fromValue = (float)$ufrom;
+        $userId = (int)$lockedUser['id'];
+        $insertInvestment = $link->prepare("INSERT INTO investment (email, pname, increase, bonus, duration, pdate, froms, activate, usd, profit, payday, lprofit, status) VALUES (?, ?, ?, 0, ?, ?, ?, 1, ?, 0, ?, 0, '')");
+        $inserted = $insertInvestment && $insertInvestment->bind_param('ssdisdds', $email, $pname, $increaseValue, $durationValue, $cdate, $fromValue, $amountValue, $cpayday) && $insertInvestment->execute();
+        if ($insertInvestment) {
+            $insertInvestment->close();
+        }
+        $debit = $link->prepare('UPDATE users SET walletbalance = walletbalance - ? WHERE id = ? AND is_on_hold = 0 AND walletbalance >= ?');
+        $debited = $inserted && $debit && $debit->bind_param('did', $amountValue, $userId, $amountValue) && $debit->execute() && $debit->affected_rows === 1;
+        if ($debit) {
+            $debit->close();
+        }
+        if ($debited && $link->commit()) {
+            echo "<script>alert('Investment of $".number_format($amountValue, 2)." in ".$pname." activated successfully from your wallet balance!'); window.location.href='mypackages.php';</script>";
             exit();
         }
+        $link->rollback();
+        $err = addslashes($link->error ?: 'Database operation failed');
+        echo "<script>alert('Failed to activate investment: ".$err."'); window.location.href='packages.php';</script>";
+        exit();
     }
 
     $sql121 = "SELECT * FROM wallet WHERE name = '$currency' LIMIT 1";

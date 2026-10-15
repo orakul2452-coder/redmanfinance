@@ -5,6 +5,7 @@ include "../config.php";
 
 $msg = "";
 $err = "";
+$kycStatus = 'unverified';
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
 use PHPMailer\PHPMailer\Exception;
@@ -24,6 +25,7 @@ if(isset($_SESSION['email'])){
         $username = $row1['username'];
         $id_front = $row1['id_front'];
         $id_back = $row1['id_back'];
+        $kycStatus = $row1['kyc_status'] ?? 'unverified';
         $referred = $row1['referred'];
     } else {
         header("location: ../login.php");
@@ -51,7 +53,7 @@ if (isset($_POST['upload'])) {
     if ($check1 === false || $check2 === false) {
         $err = "Please select valid image files";
     } else {
-        $query = mysqli_query($link, "UPDATE users SET id_back = '$imgname1', id_front = '$imgname2' WHERE email = '$email'");
+        $query = mysqli_query($link, "UPDATE users SET id_back = '$imgname1', id_front = '$imgname2', kyc_status = 'pending', kyc_reviewed_at = NULL, kyc_reviewed_by = NULL WHERE email = '$email'");
         if ($query) {
             move_uploaded_file($tempname1, $folder1);
             move_uploaded_file($tempname2, $folder2);
@@ -63,6 +65,7 @@ if (isset($_POST['upload'])) {
             $row1 = mysqli_fetch_assoc($result);
             $id_front = $row1['id_front'];
             $id_back = $row1['id_back'];
+            $kycStatus = $row1['kyc_status'] ?? 'pending';
         } else {
             $err = "Error occurred during upload";
         }
@@ -293,9 +296,10 @@ if(isset($_POST['submit'])){
                         <?php endif; ?>
                         
                         <!-- ID Verification Section -->
-                        <?php if(empty($id_front) || empty($id_back)): ?>
+                        <?php if(empty($id_front) || empty($id_back) || $kycStatus === 'rejected'): ?>
                         <div class="mb-6 p-4 bg-blue-900 bg-opacity-20 rounded-lg">
                             <h3 class="text-lg font-semibold text-primary mb-2">Verify Your Photo ID</h3>
+                            <p class="mb-3">KYC status: <strong><?php echo htmlspecialchars(ucfirst($kycStatus), ENT_QUOTES, 'UTF-8'); ?></strong></p>
                             <p class="mb-4">Due to financial regulations, we require verification of your ID. This helps prevent someone else from creating an account in your name.</p>
                             <p>After completing this step, you'll be ready to start investing with Redman Finance.</p>
                             
@@ -404,7 +408,7 @@ if(isset($_POST['submit'])){
                     <?php if(!empty($id_front) && !empty($id_back)): ?>
                     <div class="card p-6">
                         <h2 class="text-xl font-bold text-primary mb-4">ID Verification</h2>
-                        <p class="text-gray-300 mb-4">Your ID has been successfully verified.</p>
+                        <p class="text-gray-300 mb-4">KYC status: <strong><?php echo htmlspecialchars(ucfirst($kycStatus), ENT_QUOTES, 'UTF-8'); ?></strong>. Uploaded documents require administrator review.</p>
                         
                         <div class="space-y-4">
                             <div>
