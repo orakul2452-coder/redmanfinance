@@ -52,6 +52,7 @@ $wbtc1 = 0;
 $fedrefer = "SELECT * FROM users WHERE referred like '%$refcode%'";
 $confed=mysqli_query($link, $fedrefer);
 $cuntfed = mysqli_num_rows($confed);
+$referralLink = $appBaseUrl . '/trade/register.php?ref=' . rawurlencode($refcode);
 
 
 
@@ -218,6 +219,20 @@ $cuntfed = mysqli_num_rows($confed);
                                    
 
                                                                                 <div class="row">
+                                                                                            <div class="col-md-12">
+                                                                                                <div class="card">
+                                                                                                    <div class="header">
+                                                                                                        <h4 class="title">Your Referral Link</h4>
+                                                                                                    </div>
+                                                                                                    <div class="content">
+                                                                                                        <p>Earn a one-time $500 referral cashback when a referred customer completes their first approved investment of $5,000 or more. The customer receives a $500 discount; existing referral commissions remain subject to the program terms.</p>
+                                                                                                        <div class="input-group">
+                                                                                                            <input type="text" class="form-control" id="referralLink" value="<?php echo htmlspecialchars($referralLink, ENT_QUOTES, 'UTF-8'); ?>" readonly aria-label="Your referral link">
+                                                                                                            <span class="input-group-btn"><button class="btn btn-primary" type="button" onclick="copyReferralLink()" aria-label="Copy referral link"><i class="fa fa-copy" aria-hidden="true"></i> Copy</button></span>
+                                                                                                        </div>
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            </div>
                                                 <div class="col-md-4">
                                                     <div class="card">
 
@@ -272,7 +287,19 @@ $cuntfed = mysqli_num_rows($confed);
                 </body>
 
                 <!--   Core JS Files   -->
-                <script src="assets/js/jquery.3.2.1.min.js" type="text/javascript"></script>
+                    <script>
+                        function copyReferralLink() {
+                            var input = document.getElementById('referralLink');
+                            input.select();
+                            input.setSelectionRange(0, input.value.length);
+                            if (navigator.clipboard && window.isSecureContext) {
+                                navigator.clipboard.writeText(input.value);
+                            } else {
+                                document.execCommand('copy');
+                            }
+                        }
+                    </script>
+                    <script src="assets/js/jquery.3.2.1.min.js" type="text/javascript"></script>
                 <script src="assets/js/bootstrap.min.js" type="text/javascript"></script>
 
                 <!--  Charts Plugin -->

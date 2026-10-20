@@ -4,6 +4,8 @@ session_start();
 include "../../conn.php";
 include "../../config.php";
 require_once "../../risk.php";
+require_once "../../email_notifications.php";
+require_once "../../referral_rewards.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -19,6 +21,9 @@ if(isset($_GET['referred'])){
 if(!isset($_SESSION['uid'])){
 	header("location:../c2wadmin/signin.php");
 	exit();
+}
+if (empty($_SESSION['deposit_admin_csrf'])) {
+	$_SESSION['deposit_admin_csrf'] = bin2hex(random_bytes(32));
 }
 if(isset($_POST['backdate'])){
 	$transactionId = isset($_POST['transaction_id']) ? (int)$_POST['transaction_id'] : 0;
@@ -39,6 +44,57 @@ if(isset($_POST['backdate'])){
 		}
 	}
 }
+if (isset($_POST['reject'])) {
+	$transactionId = filter_input(INPUT_POST, 'transaction_id', FILTER_VALIDATE_INT);
+	$rejectionReason = trim((string)($_POST['rejection_reason'] ?? ''));
+	$csrfToken = (string)($_POST['csrf_token'] ?? '');
+	if (!$transactionId || !isset($_SESSION['deposit_admin_csrf']) || !hash_equals($_SESSION['deposit_admin_csrf'], $csrfToken) || $rejectionReason === '' || strlen($rejectionReason) > 500) {
+		$msg = 'A valid request and rejection reason (1-500 characters) are required.';
+	} else {
+		$link->begin_transaction();
+		try {
+			$select = $link->prepare("SELECT id, email, usd, tnxid, status FROM btc WHERE id = ? AND type = 'Deposit' FOR UPDATE");
+			$select->bind_param('i', $transactionId);
+			$select->execute();
+			$deposit = $select->get_result()->fetch_assoc();
+			$select->close();
+			if (!$deposit || !in_array(strtolower((string)$deposit['status']), ['pending', ''], true)) {
+				throw new RuntimeException('This deposit is missing or already processed.');
+			}
+			$reject = $link->prepare("UPDATE btc SET status = 'rejected', comment = ? WHERE id = ? AND type = 'Deposit' AND status <> 'approved'");
+			$reject->bind_param('si', $rejectionReason, $transactionId);
+			$reject->execute();
+			if ($reject->affected_rows !== 1) {
+				$reject->close();
+				throw new RuntimeException('Unable to reject the deposit.');
+			}
+			$reject->close();
+			if (!redman_referral_promo_release_deposit($link, $transactionId)) {
+				throw new RuntimeException('Unable to release the reserved referral promotion.');
+			}
+			$userQuery = $link->prepare('SELECT fname, lname, username FROM users WHERE email = ? LIMIT 1');
+			$userQuery->bind_param('s', $deposit['email']);
+			$userQuery->execute();
+			$user = $userQuery->get_result()->fetch_assoc() ?: [];
+			$userQuery->close();
+			$notificationId = redman_email_enqueue($link, 'deposit-rejected:' . $transactionId, $deposit['email'], 'deposit_rejected', [
+				'name' => trim(($user['fname'] ?? '') . ' ' . ($user['lname'] ?? '')) ?: ($user['username'] ?? 'there'),
+				'amount' => (float)$deposit['usd'],
+				'reference' => $deposit['tnxid'],
+				'reason' => $rejectionReason,
+			]);
+			if (!$link->commit()) {
+				throw new RuntimeException('Unable to commit deposit rejection.');
+			}
+			redman_email_dispatch($link, $notificationId);
+			$msg = 'Deposit rejected and customer notified.';
+		} catch (Throwable $error) {
+			$link->rollback();
+			$msg = $error->getMessage();
+		}
+	}
+}
+
 if(isset($_POST['approve'])){
 	$tnx = $link->real_escape_string($_POST['tnx']);
 	$usd = (float)$_POST['usd'];
@@ -101,6 +157,7 @@ if(isset($_POST['approve'])){
 				$usd = (float)$row_btc['usd'];
 				$email = $row_btc['email'];
 				$investplan = $row_btc['account'];
+				$selectedDuration = (int)($row_btc['duration'] ?? 0);
 				$cointype = $row_btc['cointype'];
 				$referred = $row_btc['referred'];
 				$increase = 1.5;
@@ -117,6 +174,9 @@ if(isset($_POST['approve'])){
 					$bonus = (float)$packageRow['bonus'];
 					$duration = (int)$packageRow['duration'];
 					$froms = (float)$packageRow['froms'];
+				}
+				if (redman_is_valid_investment_duration($selectedDuration)) {
+					$duration = $selectedDuration;
 				}
 				$riskUserQuery = $link->prepare('SELECT * FROM users WHERE email = ? LIMIT 1 FOR UPDATE');
 				$riskUserQuery->bind_param('s', $email);
@@ -136,13 +196,27 @@ if(isset($_POST['approve'])){
 						$msg = $riskDecision['reason'] . "; approval was not applied.";
 						$riskHandled = true;
 					} elseif ($riskDecision['hold']) {
-						$held = redman_risk_start_hold($link, $riskUser, $usd, $riskDecision['reason'], (int)$_SESSION['uid']);
+						$riskHoldNotificationId = redman_risk_start_hold($link, $riskUser, $usd, $riskDecision['reason'], (int)$_SESSION['uid']);
 						$holdDeposit = $link->prepare("UPDATE btc SET status = 'approved', risk_held = 1 WHERE id = ? AND type = 'Deposit' AND status <> 'approved'");
-						$holdDepositOk = $held && $holdDeposit && $holdDeposit->bind_param('i', $depositId) && $holdDeposit->execute() && $holdDeposit->affected_rows === 1;
+						$holdDepositOk = $riskHoldNotificationId && $holdDeposit && $holdDeposit->bind_param('i', $depositId) && $holdDeposit->execute() && $holdDeposit->affected_rows === 1;
 						if ($holdDeposit) {
 							$holdDeposit->close();
 						}
+						$notificationId = 0;
+						if ($holdDepositOk) {
+							$notificationId = redman_email_enqueue($link, 'deposit-vaulted:' . $depositId, $email, 'deposit_vaulted', [
+								'name' => trim((string)$riskUser['fname'] . ' ' . (string)$riskUser['lname']) ?: $usernamewtc,
+								'amount' => $usd,
+								'reference' => $tnx,
+								'reason' => $riskDecision['reason'],
+								'detail' => 'Selected investment term: ' . (redman_investment_duration_options()[$duration] ?? $duration . ' days'),
+							]);
+						}
 						if ($holdDepositOk && $link->commit()) {
+							if (is_int($riskHoldNotificationId) && $riskHoldNotificationId > 0) {
+								redman_email_dispatch($link, $riskHoldNotificationId);
+							}
+							redman_email_dispatch($link, $notificationId);
 							$msg = "Deposit approved into the account vault. No investment or referral credit was created while the account is held.";
 						} else {
 							$link->rollback();
@@ -160,8 +234,11 @@ if(isset($_POST['approve'])){
 		$inv_ok = mysqli_query($link, $sql22);
 
 		if(!$inv_ok){
-			$msg = "Warning: Investment created with default parameters. Error: " . mysqli_error($link);
-		}
+			$link->rollback();
+			$msg = "Investment activation failed; approval was not applied. Error: " . mysqli_error($link);
+		} else {
+		$investmentId = (int)$link->insert_id;
+		$referralReward = redman_referral_promo_finalize($link, (int)$riskUser['id'], $investmentId, $depositId);
 
 		if($referred != ""){ 
 			$refb = ($usd / 100) * 4;
@@ -183,76 +260,33 @@ if(isset($_POST['approve'])){
 		$dbbalance = $userwallebalance + $usd; 
 		mysqli_query($link, "UPDATE btc SET status = 'approved', risk_held = 0 WHERE id = '$depositId' AND status <> 'approved'");
 		mysqli_query($link, "UPDATE users SET walletbalance = '$dbbalance' WHERE email = '$email'");
+		$notificationId = redman_email_enqueue($link, 'deposit-approved:' . $depositId, $email, 'deposit_approved', [
+			'name' => trim((string)$riskUser['fname'] . ' ' . (string)$riskUser['lname']) ?: $usernamewtc,
+			'amount' => $usd,
+			'reference' => $tnx,
+			'detail' => 'Selected investment term: ' . (redman_investment_duration_options()[$duration] ?? $duration . ' days') . ($referralReward ? '; $500 referral promotion applied to the amount paid.' : ''),
+		]);
+		$referrerNotificationId = 0;
+		if ($referralReward) {
+			$referrer = $referralReward['referrer'];
+			$referrerNotificationId = redman_email_enqueue($link, 'referral-cashback-paid:investment:' . $investmentId, $referrer['email'], 'referral_cashback_paid', [
+				'name' => trim((string)$referrer['fname'] . ' ' . (string)$referrer['lname']) ?: $referrer['username'],
+				'amount' => $referralReward['amount'],
+				'reference' => (string)$investmentId,
+			]);
+		}
 		if (!$link->commit()) {
 			$link->rollback();
 			$msg = "Unable to commit deposit approval.";
 		} else {
+			redman_email_dispatch($link, $notificationId);
+			if ($referrerNotificationId > 0) {
+				redman_email_dispatch($link, $referrerNotificationId);
+			}
 
 		$msg = "Transaction approved successfully and investor investment is now active!";
-
-    if($msg === "Transaction approved successfully and investor investment is now active!"){
-    
-    
-		    
-		    
-		include_once "PHPMailer/PHPMailer.php";
-    require_once 'PHPMailer/Exception.php';
-
-
- $mail= new PHPMailer();
-     $mail->setFrom($emaila);
-   $mail->FromName = $name;
-    $mail->addAddress($email, $usernamewtc);
-    $mail->Subject = "Deposit Approval";
-    $mail->isHTML(true);
-    $mail->Body = '
-    
-    
-    <div style=";width: 100%;height: 100%; font-family: sans-serif; font-weight: 100;" class="be_container"> 
- 
- <div style="background:#fff;max-width: 600px;margin: 0px auto;padding: 30px;"class="be_inner_containr"> <div class="be_header">
- 
- 
- 
- <div class="be_user" style="float: left"> <p>Dear: '.$usernamewtc.'</p> </div> 
- 
- <div style="clear: both;"></div> 
- 
- <div class="be_bluebar" style=" padding: 20px; margin-top: 10px;">
- 
- <h1>Deposit Approval</h1>
- 
- </div> </div> 
- 
- <div class="be_body" style="padding: 20px;"> <p style="line-height: 25px; color:#FF6600;"> 
-Your deposit of '.$usd.' USD worth of '.$cointype.' has been approved. Thank for investing in us.
- 
- </p>
- 
- <div class="be_footer">
- <div style="border-bottom: 1px solid #ccc;"></div>
- 
- 
- <div class="be_bluebar" style=" padding: 20px; color: #FF6600;;margin-top: 10px;">
- 
- <p>
- Copyright ©'.$cy.' '.$name.'. </p> <div class="be_logo" style=" width:60px;height:40px;float: right;"> </div> </div> </div> </div></div>';
-     
-  $mail->send();
-     
-	
 }
-		 else {
-    $msg = "transaction was not approved! ";
-}
-
-
-		
-				    
-	
-
-		
-}
+		}
 		}
 		}
 
@@ -261,8 +295,15 @@ Your deposit of '.$usd.' USD worth of '.$cointype.' has been approved. Thank for
 if(isset($_POST['delete'])){
 	
 	$tnx = $_POST['tnx'];
-	
-$sql = "DELETE FROM btc WHERE tnxid='$tnx'";
+	$depositLookup = $link->prepare("SELECT id FROM btc WHERE tnxid = ? AND type = 'Deposit' AND status <> 'approved' LIMIT 1");
+	$depositLookup->bind_param('s', $tnx);
+	$depositLookup->execute();
+	$pendingDeposit = $depositLookup->get_result()->fetch_assoc();
+	$depositLookup->close();
+	if ($pendingDeposit) {
+		redman_referral_promo_release_deposit($link, (int)$pendingDeposit['id']);
+	}
+	$sql = "DELETE FROM btc WHERE tnxid='$tnx'";
 
 if (mysqli_query($link, $sql)) {
     $msg = "Transaction deleted successfully!";
@@ -401,6 +442,9 @@ if(isset($row['status']) &&  $row['status']== 'approved'){
 	
 	$sec = 'Approved &nbsp;&nbsp;<i style="background-color:green;color:#fff; font-size:20px;" class="fa  fa-check" ></i>';
 
+} elseif(isset($row['status']) && strtolower((string)$row['status']) === 'rejected') {
+	$sec = 'Rejected';
+
 }else{
 $sec ='Pending &nbsp;&nbsp;<i class="fa  fa-refresh" style=" font-size:20px;color:red"></i>';
 
@@ -411,6 +455,7 @@ $sec ='Pending &nbsp;&nbsp;<i class="fa  fa-refresh" style=" font-size:20px;colo
 
 						<tr class="primary">
 						<form action="deposit.php" method="post">
+							<input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['deposit_admin_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
                             <td><?php echo $row['email'];?></td>
 							
 							<td style="display:none;"><input type="hidden" name="transaction_id" value="<?php echo (int)$row['id'];?>"> </td>
@@ -436,11 +481,11 @@ $sec ='Pending &nbsp;&nbsp;<i class="fa  fa-refresh" style=" font-size:20px;colo
 				   <button class="btn btn-default btn-xs" type="submit" name="backdate">Save date</button>
 			   </td>
 			  
-                            <td><button class="btn btn-success" type="submit" name="approve"><span class="glyphicon glyphicon-check"> Approve</span></button></td>
+							<td><?php if (strtolower((string)$row['status']) !== 'approved' && strtolower((string)$row['status']) !== 'rejected'): ?><button class="btn btn-success" type="submit" name="approve"><span class="glyphicon glyphicon-check"> Approve</span></button><?php endif; ?></td>
                             
 						
 							
-							<td><button class="btn btn-danger" type="submit" name="delete"><span class="glyphicon glyphicon-check"> Delete</span></button></td>
+							<td><?php if (strtolower((string)$row['status']) !== 'approved' && strtolower((string)$row['status']) !== 'rejected'): ?><textarea name="rejection_reason" maxlength="500" placeholder="Reason required to reject" style="display:block;min-width:200px;color:#222"></textarea><button class="btn btn-warning" type="submit" name="reject" onclick="return this.form.rejection_reason.value.trim().length > 0 || (alert('Enter a rejection reason first.'), false);">Reject with reason</button><?php endif; ?><button class="btn btn-danger" type="submit" name="delete"><span class="glyphicon glyphicon-check"> Delete</span></button></td>
 							
    
 </form>

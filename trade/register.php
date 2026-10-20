@@ -3,10 +3,7 @@
 include "../db.php";
 include "../config.php";
 
-// Load PHPMailer
-require 'Exception.php';
-require 'PHPMailer.php';
-require 'SMTP.php';
+require_once __DIR__ . '/../email_notifications.php';
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -154,11 +151,20 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
         mysqli_query($link, "DELETE FROM btc WHERE email='$clean_email'");
 
         // Prepare an insert statement
-        $sql = "INSERT INTO users (fname, lname, email, username, password, refcode, session, referred, profit, refbonus, walletbalance, pm, eth, btc, country, phone, zip, account) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        do {
+          $accountNumber = 'RF' . (string)random_int(1000000000, 9999999999);
+          $accountNumberCheck = mysqli_prepare($link, 'SELECT id FROM users WHERE account_number = ? LIMIT 1');
+          mysqli_stmt_bind_param($accountNumberCheck, 's', $accountNumber);
+          mysqli_stmt_execute($accountNumberCheck);
+          mysqli_stmt_store_result($accountNumberCheck);
+          $accountNumberExists = mysqli_stmt_num_rows($accountNumberCheck) > 0;
+          mysqli_stmt_close($accountNumberCheck);
+        } while ($accountNumberExists);
+        $sql = "INSERT INTO users (fname, lname, email, username, password, refcode, session, referred, profit, refbonus, walletbalance, pm, eth, btc, country, phone, zip, account, account_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
          
         if($stmt = mysqli_prepare($link, $sql)){
             // Bind variables to the prepared statement as parameters
-          mysqli_stmt_bind_param($stmt, "ssssssisdddsssssss", $param_fname, $param_lname, $param_email, $param_username, $param_password, $param_refcode, $param_session, $param_referred, $param_profit, $param_refbonus, $param_walletbalance, $param_pm, $param_eth, $param_btc, $param_country, $param_phone, $param_zip, $param_account);
+          mysqli_stmt_bind_param($stmt, "ssssssisdddssssssss", $param_fname, $param_lname, $param_email, $param_username, $param_password, $param_refcode, $param_session, $param_referred, $param_profit, $param_refbonus, $param_walletbalance, $param_pm, $param_eth, $param_btc, $param_country, $param_phone, $param_zip, $param_account, $param_account_number);
             
             // Set parameters
             $param_fname = $fname;
@@ -179,80 +185,24 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
             $param_phone = $mobile;
             $param_zip = $zip;
             $param_account = $account_type;
+            $param_account_number = $accountNumber;
             
             // Attempt to execute the prepared statement
             if(mysqli_stmt_execute($stmt)){
-                // Send welcome email
-                $mail = new PHPMailer(true);
-                
-                try {
-                    // Server settings
-                    $mail->isSMTP();
-                    $mail->Host       = getenv('SMTP_HOST') ?: '';
-                    $mail->SMTPAuth   = true;
-                    $mail->Username   = getenv('SMTP_USERNAME') ?: '';
-                    $mail->Password   = getenv('SMTP_PASSWORD') ?: '';
-                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;            
-                    $mail->Port       = 465;   
-                    
-                    // Recipients
-                    $mail->setFrom(getenv('SMTP_USERNAME') ?: '', 'Redman Finance');
-                    $mail->addAddress($email);
-                    
-                    // Content
-                    $mail->isHTML(true);
-                    $mail->Subject = 'Welcome to Redman Finance';
-                    
-                    // Email body with dark theme styling
-                    $mail->Body = '
-                    <div style="background: #0D1627; color: #ffffff; padding: 20px; font-family: Arial, sans-serif;">
-                        <div style="max-width: 600px; margin: 0 auto; border: 1px solid #f4d35e; border-radius: 5px;">
-                            <div style="background: #1a2639; padding: 20px; text-align: center; border-bottom: 2px solid #f4d35e;">
-                                <img src="https://redmanfinance.org.ng/public/redman%20finance.svg" alt="Redman Finance" style="height: 50px;">
-                                <h2 style="color: #f4d35e; margin-top: 10px;">Welcome to Redman Finance</h2>
-                            </div>
-                            
-                            <div style="padding: 20px;">
-                                <p>Hello '.$fname.',</p>
-                                <p>Thank you for registering with Redman Finance. Your account has been successfully created.</p>
-                                
-                                <div style="background: #1a2639; padding: 15px; margin: 20px 0; border-left: 3px solid #f4d35e;">
-                                    <p style="margin: 0;">Username: <strong>'.$username.'</strong></p>
-                                    <p style="margin: 0;">Email: <strong>'.$email.'</strong></p>
-                                    <p style="margin: 0;">Account Type: <strong>'.$account_type.'</strong></p>
-                                </div>
-                                
-                                <p>Redman Finance is the future of investment. Invite your family and friends to join, and you will earn bonus.</p>
-                                <p>Your funds are 100% safe with Redman Finance, we guarantee you a profitable investment.</p>
-                                
-                                <p style="margin-top: 20px;">
-                                    <a href="https://redmanfinance.org.ng/login.php" style="background-color: #f4d35e; color: #0D1627; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">Login to Your Account</a>
-                                </p>
-                            </div>
-                            
-                            <div style="background: #1a2639; padding: 15px; text-align: center; border-top: 1px solid #f4d35e; font-size: 12px;">
-                                <p>© '.date('Y').' Redman Finance. All rights reserved.</p>
-                                <p>This is an automated message, please do not reply directly to this email.</p>
-                            </div>
-                        </div>
-                    </div>';
-                    
-                    $mail->AltBody = "Welcome to Redman Finance\n\nHello $fname,\n\nThank you for registering with Redman Finance. Your account has been successfully created.\n\nUsername: $username\nEmail: $email\nAccount Type: $account_type\n\nRedman Finance is the future of investment. Invite your family and friends to join, and you will earn bonus.\n\nLogin to your account: https://redmanfinance.org.ng/login.php\n\n© ".date('Y')." Redman Finance. All rights reserved.";
-                    
-                    $mail->send();
-                    
-                    $msg = "Registration successful! We've sent a welcome email to your address.";
-                    
-                    // Redirect to login page
-                    header("Location: login.php?success");
-                    exit();
-                    
-                } catch (Exception $e) {
-                    $msg = "Registration successful, but we couldn't send a welcome email. Please contact support.";
-                    // Still redirect since registration was successful
-                    header("Location: login.php?success");
-                    exit();
-                }
+              $userId = (int)mysqli_stmt_insert_id($stmt);
+              try {
+                redman_email_enqueue_and_dispatch(
+                  $link,
+                  'welcome:user:' . $userId,
+                  $email,
+                  'welcome',
+                  ['name' => $fname, 'detail' => 'Username: ' . $username . '. Account type: ' . $account_type . '. Account number: ' . $accountNumber]
+                );
+              } catch (Throwable $mailError) {
+                error_log('Welcome notification queued/delivery failed for user ' . $userId);
+              }
+              header("Location: login.php?success");
+              exit();
             } else {
               error_log('Registration insert failed: ' . mysqli_stmt_error($stmt));
                 $msg = "Something went wrong. Please try again later.";
@@ -677,6 +627,10 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
   <footer class="py-4 bg-gray-900 text-gray-300 text-center">
     <p>&copy; 2022 - <script>document.write(new Date().getFullYear())</script> | Redman Finance All Rights Reserved</p>
   </footer>
+
+  <a href="tel:+18167488978" aria-label="Call Redman Finance support" title="Call Redman Finance support" class="whatsapp-float">
+    <i class="fa-solid fa-phone text-2xl"></i>
+  </a>
   
   <!-- jQuery CDN (if still needed for other scripts) -->
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>

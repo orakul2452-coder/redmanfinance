@@ -119,6 +119,7 @@ include 'header.php';
 						<tr class="info">
 						<th>Username</th>
 							<th>Email</th>
+              <th>Phone</th>
 							<th style="display:none;"></th>
 							
 							<th>Refcode</th>
@@ -144,6 +145,7 @@ include 'header.php';
 						<form action="users.php" method="post">
 <td><?php echo $row['username'];?></td>
 							<td id="email"><?php echo $row['email'];?></td>
+              <td><?php echo htmlspecialchars((string)($row['phone'] ?? ''), ENT_QUOTES, 'UTF-8');?></td>
 							<td style="display:none;"><input type="hidden" name="email" value="<?php echo $row['email'];?>"> </td>
 							
 							<td><?php echo $row['refcode'];?></td>

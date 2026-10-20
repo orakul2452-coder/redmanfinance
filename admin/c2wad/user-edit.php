@@ -69,6 +69,7 @@ else{
       $profit =$link->real_escape_string( $_POST['profit']);
       $fname =$link->real_escape_string( $_POST['fname']);
       $lname =$link->real_escape_string( $_POST['lname']);
+      $phone =$link->real_escape_string(trim((string)($_POST['phone'] ?? '')));
        
            
          
@@ -76,7 +77,7 @@ else{
       
           
         
-      $sql1 = "UPDATE users SET username='$username', fname='$fname', email='$emails',password='$password', walletbalance=IF(is_on_hold = 1, walletbalance, '$balance'), refbonus='$refbonus', refcode='$refcode', profit='$profit', lname='$lname' WHERE email='$email'";
+      $sql1 = "UPDATE users SET username='$username', fname='$fname', email='$emails', password='$password', phone='$phone', walletbalance=IF(is_on_hold = 1, walletbalance, '$balance'), refbonus='$refbonus', refcode='$refcode', profit='$profit', lname='$lname' WHERE email='$email'";
       
       if (mysqli_query($link, $sql1)) {
           $msg = "Account Details Edited Successfully!";
@@ -193,6 +194,13 @@ else{
                           <td> <input type="text" name="email" class="form-control" value="<?php echo $row['email'] ;?>"></td>
 
 </div>
+                        </tr>
+
+                        <tr>
+                          <th colspan="4">Phone Number</th>
+                        </tr>
+                        <tr>
+                          <td colspan="4"><input type="tel" name="phone" class="form-control" maxlength="200" value="<?php echo htmlspecialchars((string)($row['phone'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" aria-label="User phone number"></td>
                         </tr>
 
 

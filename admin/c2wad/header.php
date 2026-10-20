@@ -170,6 +170,7 @@
           </a>
           <ul class="treeview-menu">
           <li><a href="addpackages.php"><i class="fa fa-plus"></i> Add Packages</a></li>
+          <li><a href="strategy_registry.php"><i class="fa fa-line-chart"></i> AI Strategy Evidence Registry</a></li>
             
             <li><a href="upgrade.php"><i class="fa fa-eye"></i> View Added Packages</a></li>
            

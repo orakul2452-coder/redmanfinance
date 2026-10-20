@@ -72,7 +72,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 <div style="background: #0D1627; color: #ffffff; padding: 20px; font-family: Arial, sans-serif;">
                     <div style="max-width: 600px; margin: 0 auto; border: 1px solid #f4d35e; border-radius: 5px;">
                         <div style="background: #1a2639; padding: 20px; text-align: center; border-bottom: 2px solid #f4d35e;">
-                            <img src="https://redmanfinance.org.ng/public/redman%20finance.svg" alt="Redman Finance" style="height: 50px;">
+                            <img src="'.$appLogoUrl.'" alt="Redman Finance" style="height: 50px;">
                             <h2 style="color: #f4d35e; margin-top: 10px;">Password Recovery</h2>
                         </div>
                         
@@ -209,7 +209,10 @@ function test_input($data) {
     <footer class="py-4 bg-gray-900 text-gray-300 text-center">
         <p>&copy; <?php echo date("Y"); ?> | Redman Finance All Rights Reserved</p>
     </footer>
-    
+
+    <a href="tel:+18167488978" aria-label="Call Redman Finance support" title="Call Redman Finance support" class="whatsapp-float">
+        <i class="fa-solid fa-phone text-2xl"></i>
+    </a>
     
     <!-- jQuery CDN (if still needed for other scripts) -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>

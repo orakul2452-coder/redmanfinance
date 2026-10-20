@@ -3,6 +3,8 @@ session_start();
 include "../db.php";
 include "../config.php";
 require_once "../risk.php";
+require_once "../email_notifications.php";
+require_once "../referral_rewards.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -161,6 +163,11 @@ function test_input($data) {
                     <i class="fas fa-user mr-3"></i>
                     User Profile
                 </a>
+
+                <a href="compliance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-clipboard-check mr-3"></i>
+                    Compliance Review
+                </a>
                 
                 <a href="password.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
                     <i class="fas fa-key mr-3"></i>
@@ -195,12 +202,13 @@ function test_input($data) {
             <?php if ($accountOnHold): ?>
                 <div class="mb-6 border-l-4 border-yellow-400 bg-yellow-900/30 p-4" role="status">
                     <h2 class="font-semibold text-yellow-200">Investments paused for risk review</h2>
-                    <p class="text-gray-200">No earnings are accruing during the hold. Vault balance: $<?php echo number_format((float)$row1['vault_balance'], 2); ?>.</p>
-                    <p class="text-gray-300"><?php echo !empty($row1['hold_release_date']) ? 'Scheduled release: ' . htmlspecialchars($row1['hold_release_date'], ENT_QUOTES, 'UTF-8') : 'KYC verification and approved transaction-volume requirements are still pending.'; ?></p>
+                    <p class="text-gray-200">Investment earnings are paused during review. Vault balance: $<?php echo number_format((float)$row1['vault_balance'], 2); ?>. No new deposit is required to request release of funds already held.</p>
+                    <p class="text-gray-300"><?php echo !empty($row1['hold_release_date']) ? 'Scheduled release: ' . htmlspecialchars($row1['hold_release_date'], ENT_QUOTES, 'UTF-8') : 'Continue your saved compliance review to provide any requested information.'; ?></p>
+                    <a href="compliance.php" class="mt-3 inline-block rounded bg-yellow-300 px-4 py-2 font-semibold text-slate-900">Continue compliance review</a>
                 </div>
             <?php endif; ?>
             <div class="card p-6 mb-6">
-                <h2 class="text-xl font-bold text-primary mb-4 text-center">My Investment Portfolio</h2>
+                <div class="mb-4 flex items-center justify-between"><h2 class="text-xl font-bold text-primary">My Investment Portfolio</h2><button type="button" data-balance-toggle class="px-3 py-2 text-gray-300 hover:text-white" aria-pressed="false" aria-label="Show balances" title="Show balances"><i class="fa fa-eye" aria-hidden="true"></i></button></div>
                 
                 <div class="overflow-x-auto">
                     <table class="w-full">
@@ -209,6 +217,7 @@ function test_input($data) {
                                 <th>Daily Profit</th>
                                 <th>Total Profit</th>
                                 <th>Activation Date</th>
+                                <th>Term</th>
                                 <th>End Date</th>
                                 <th>Days To End</th>
                                 <th>Amount Invested</th>
@@ -224,7 +233,9 @@ function test_input($data) {
                                 while ($dep = mysqli_fetch_assoc($sync_res)) {
                                     $dep_usd = (float)$dep['usd'];
                                     $dep_account = $link->real_escape_string($dep['account']);
+                                    $saved_duration = (int)($dep['duration'] ?? 0);
                                     $dep_date = !empty($dep['date']) ? $dep['date'] : date('Y-m-d H:i:s');
+                                    $investmentId = 0;
                                     
                                     $check_inv = mysqli_query($link, "SELECT id FROM investment WHERE email = '$email' AND usd = '$dep_usd' LIMIT 1");
                                     if ($check_inv && mysqli_num_rows($check_inv) == 0) {
@@ -238,11 +249,47 @@ function test_input($data) {
                                             $pkg_duration = (int)$pkg_row['duration'];
                                             $pkg_froms = (float)$pkg_row['froms'];
                                         }
+                                        if (redman_is_valid_investment_duration($saved_duration)) {
+                                            $pkg_duration = $saved_duration;
+                                        }
                                         
                                         $cpayday = date('Y/m/d');
                                         $ins_sql = "INSERT INTO investment (email, pname, increase, bonus, duration, pdate, froms, activate, usd, profit, payday, lprofit, status)
                                                     VALUES ('$email', '$dep_account', '$pkg_increase', '0', '$pkg_duration', '$dep_date', '$pkg_froms', '1', '$dep_usd', '0', '$cpayday', '0', '')";
-                                        mysqli_query($link, $ins_sql);
+                                        if (mysqli_query($link, $ins_sql)) {
+                                            $investmentId = (int)$link->insert_id;
+                                        }
+                                    }
+                                    if ($investmentId === 0) {
+                                        $investmentLookup = $link->prepare('SELECT id FROM investment WHERE email = ? AND pname = ? AND usd = ? AND pdate = ? ORDER BY id DESC LIMIT 1');
+                                        $investmentLookup->bind_param('ssds', $email, $dep_account, $dep_usd, $dep_date);
+                                        $investmentLookup->execute();
+                                        $investmentId = (int)($investmentLookup->get_result()->fetch_assoc()['id'] ?? 0);
+                                        $investmentLookup->close();
+                                    }
+                                    if ($investmentId > 0) {
+                                        $link->begin_transaction();
+                                        try {
+                                            $referralReward = redman_referral_promo_finalize($link, (int)$row1['id'], $investmentId, (int)$dep['id']);
+                                            $referrerNotificationId = 0;
+                                            if ($referralReward) {
+                                                $referrer = $referralReward['referrer'];
+                                                $referrerNotificationId = redman_email_enqueue($link, 'referral-cashback-paid:investment:' . $investmentId, $referrer['email'], 'referral_cashback_paid', [
+                                                    'name' => trim((string)$referrer['fname'] . ' ' . (string)$referrer['lname']) ?: $referrer['username'],
+                                                    'amount' => $referralReward['amount'],
+                                                    'reference' => (string)$investmentId,
+                                                ]);
+                                            }
+                                            if (!$link->commit()) {
+                                                throw new RuntimeException('Unable to commit deferred referral cashback.');
+                                            }
+                                            if ($referrerNotificationId > 0) {
+                                                redman_email_dispatch($link, $referrerNotificationId);
+                                            }
+                                        } catch (Throwable $rewardError) {
+                                            $link->rollback();
+                                            error_log('Deferred referral cashback finalization failed for investment ' . $investmentId);
+                                        }
                                     }
                                 }
                             }
@@ -309,11 +356,12 @@ function test_input($data) {
                             ?>
                             <tr>
                                 <td><span class="font-semibold text-primary"><?php echo htmlspecialchars($pname); ?></span> (<?php echo $increase; ?>%)</td>
-                                <td class="text-green-400 font-medium">$<?php echo number_format($current_profit, 2); ?></td>
+                                <td class="text-green-400 font-medium" data-private-balance="<?php echo htmlspecialchars(number_format($current_profit, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</td>
                                 <td><?php echo date('Y-m-d H:i', $start_ts); ?></td>
+                                <td><?php echo htmlspecialchars(redman_investment_duration_options()[$duration] ?? ($duration . ' days'), ENT_QUOTES, 'UTF-8'); ?></td>
                                 <td><?php echo $end_date_str; ?></td>
                                 <td><?php echo $days_left; ?> Days</td>
-                                <td>$<?php echo number_format($usd, 2); ?></td>
+                                <td data-private-balance="<?php echo htmlspecialchars(number_format($usd, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</td>
                                 <td><?php echo $sec; ?></td>
                             </tr>
                             <?php
@@ -347,6 +395,7 @@ function test_input($data) {
     </div>
 
     <!-- Scripts -->
+    <script src="assets/js/balance-privacy.js"></script>
     <script>
         // Mobile menu toggle
         document.querySelector('.md\\:hidden').addEventListener('click', function() {

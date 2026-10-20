@@ -27,6 +27,15 @@ if(isset($_SESSION['email'])){
         $id_back = $row1['id_back'];
         $kycStatus = $row1['kyc_status'] ?? 'unverified';
         $referred = $row1['referred'];
+        if (!empty($id_front) && !empty($id_back)) {
+            $syncKyc = $link->prepare("UPDATE users SET kyc_status = 'pending' WHERE email = ? AND kyc_status = 'unverified'");
+            if ($syncKyc) {
+                $syncKyc->bind_param('s', $email);
+                $syncKyc->execute();
+                $syncKyc->close();
+                $kycStatus = 'pending';
+            }
+        }
     } else {
         header("location: ../login.php");
     }
@@ -235,6 +244,16 @@ if(isset($_POST['submit'])){
                     <i class="fas fa-wallet mr-3"></i>
                     Add Funds
                 </a>
+
+                <a href="transfers.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-exchange-alt mr-3"></i>
+                    Transfer Funds
+                </a>
+
+                <a href="compliance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-clipboard-check mr-3"></i>
+                    Compliance Review
+                </a>
                 
                 <a href="mypackages.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
                     <i class="fas fa-wallet mr-3"></i>
@@ -385,21 +404,31 @@ if(isset($_POST['submit'])){
                 <div class="col-span-1">
                     <div class="card p-6 mb-6">
                         <h2 class="text-xl font-bold text-primary mb-4">Wallet Summary</h2>
+
+                        <div class="mb-4 border-b border-gray-700 pb-4" data-account-container>
+                            <h3 class="text-gray-300 mb-1">Transfer Account Number</h3>
+                            <div class="flex items-center gap-2"><p class="font-mono text-lg" id="profile-account-number"><?php echo htmlspecialchars((string)($row1['account_number'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></p><button type="button" data-copy-account="profile-account-number" class="px-2 py-1 text-primary hover:text-white" aria-label="Copy account number" title="Copy account number"><i class="fa fa-copy" aria-hidden="true"></i></button></div>
+                            <span class="text-sm text-gray-400" data-copy-account-status aria-live="polite"></span>
+                            <a class="text-sm text-primary" href="transfers.php">Open transfers</a>
+                        </div>
+                        <div class="mb-3 flex justify-end">
+                            <button type="button" data-balance-toggle class="px-3 py-2 text-gray-300 hover:text-white" aria-pressed="false" aria-label="Show balances" title="Show balances"><i class="fa fa-eye" aria-hidden="true"></i></button>
+                        </div>
                         
                         <div class="space-y-4">
                             <div>
                                 <h3 class="text-gray-300 mb-1">Current Balance</h3>
-                                <p class="text-2xl font-bold">$<?php echo number_format($ubalance, 2); ?></p>
+                                <p class="text-2xl font-bold" data-private-balance="<?php echo htmlspecialchars(number_format($ubalance, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</p>
                             </div>
                             
                             <div class="border-t border-gray-700 pt-4">
                                 <h3 class="text-gray-300 mb-1">Total Earnings</h3>
-                                <p class="text-2xl font-bold">$<?php echo number_format($uprofit, 2); ?></p>
+                                <p class="text-2xl font-bold" data-private-balance="<?php echo htmlspecialchars(number_format($uprofit, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</p>
                             </div>
                             
                             <div class="border-t border-gray-700 pt-4">
                                 <h3 class="text-gray-300 mb-1">Total Withdrawn</h3>
-                                <p class="text-2xl font-bold">$<?php echo number_format($wbtc1, 2); ?></p>
+                                <p class="text-2xl font-bold" data-private-balance="<?php echo htmlspecialchars(number_format((float)$wbtc1, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</p>
                             </div>
                         </div>
                     </div>
@@ -436,6 +465,8 @@ if(isset($_POST['submit'])){
     </div>
 
     <!-- Scripts -->
+    <script src="assets/js/account-number.js"></script>
+    <script src="assets/js/balance-privacy.js"></script>
     <script>
         // Mobile menu toggle
         document.querySelector('.md\\:hidden').addEventListener('click', function() {

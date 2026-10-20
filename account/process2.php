@@ -2,6 +2,7 @@
 session_start();
 include "../db.php";
 include "../config.php";
+require_once "../referral_rewards.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -26,6 +27,12 @@ if(isset($_SESSION['email'])){
 if(isset($_POST['submit'])){
     $pname = $link->real_escape_string($_POST["pname"]);
     $amount = $link->real_escape_string($_POST["amount"]);
+    $duration = $_POST['duration'] ?? '';
+    if (!redman_is_valid_investment_duration($duration)) {
+        header("location: packages.php");
+        exit();
+    }
+    $duration = (int)$duration;
 
     $sql12 = "SELECT * FROM package1 WHERE pname = '$pname' LIMIT 1";
     $result2 = mysqli_query($link, $sql12);
@@ -45,6 +52,8 @@ if(isset($_POST['submit'])){
         </script>
         ";
     }
+    $promoPreview = redman_referral_promo_preview($link, (int)$row1['id'], (float)$amount);
+    $paymentAmount = max(0, (float)$amount - (float)$promoPreview['discount']);
 }else{
     header("location: packages.php");
 }
@@ -232,11 +241,21 @@ function test_input($data) {
                     <form action="process3.php" method="post">
                         <input type="hidden" value="<?php echo htmlspecialchars($pname); ?>" name="pname" />
                         <input type="hidden" value="<?php echo htmlspecialchars($amount); ?>" name="amount" />
+                        <input type="hidden" value="<?php echo $duration; ?>" name="duration" />
+
+                        <div class="payment-info mb-6">
+                            <?php if (!empty($promoPreview['eligible'])): ?>
+                                <p class="font-semibold text-green-300">Referral promotion applied: $500 off.</p>
+                                <p class="mt-1 text-sm text-gray-300">Plan amount: $<?php echo number_format((float)$amount, 2); ?>. Amount to pay: $<?php echo number_format($paymentAmount, 2); ?>. Your investment and earnings are based on the amount paid.</p>
+                            <?php else: ?>
+                                <p class="text-sm text-gray-300">Amount to pay: $<?php echo number_format($paymentAmount, 2); ?></p>
+                            <?php endif; ?>
+                        </div>
                         
                         <div class="mb-6">
                             <label for="currency" class="block mb-2">Select Payment Method / Currency</label>
                             <select name="currency" id="currency" class="form-control" required>
-                                <option value="Account Wallet Balance">Account Wallet Balance (Available: $<?php echo number_format($ubalance, 2); ?>)</option>
+                                <option value="Account Wallet Balance">Account Wallet Balance</option>
                                 <?php 
                                 $sql22 = "SELECT * FROM wallet";
                                 $result22 = mysqli_query($link,$sql22);
@@ -269,6 +288,7 @@ function test_input($data) {
     </div>
 
     <!-- Scripts -->
+    <script src="assets/js/balance-privacy.js"></script>
     <script>
         // Mobile menu toggle
         document.querySelector('.md\\:hidden').addEventListener('click', function() {

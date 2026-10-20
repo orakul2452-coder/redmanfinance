@@ -25,6 +25,12 @@ if(isset($_SESSION['email'])){
 
 if(isset($_POST['deposit'])){
     $pname = $link->real_escape_string($_POST["pname"]);
+    $duration = $_POST['duration'] ?? '';
+    if (!redman_is_valid_investment_duration($duration)) {
+        header("location: packages.php");
+        exit();
+    }
+    $duration = (int)$duration;
 }else{
     header("location: packages.php");
 }
@@ -207,6 +213,7 @@ function test_input($data) {
                     
                     <form action="process2.php" method="post">
                         <input type="hidden" value="<?php echo htmlspecialchars($pname); ?>" name="pname" />
+                        <input type="hidden" value="<?php echo $duration; ?>" name="duration" />
                         
                         <div class="mb-6">
                             <label for="usd" class="block mb-2">Amount in USD</label>

@@ -13,4 +13,10 @@ Run local database-independent risk checks with:
 php tests/risk_rules_test.php
 ```
 
+## Admin finance alerts
+
+Apply `migrations/006_admin_alert_outbox.sql` before deploying admin finance alerts. Configure `MAKE_FINANCE_ALERT_WEBHOOK_URL` as a secret environment variable on Render, or enter the Make custom webhook URL when starting the local server with `start-local.ps1`. If API-key authentication is enabled on the Make webhook, set `MAKE_FINANCE_ALERT_WEBHOOK_API_KEY` in the same secret environment. Make is attempted first; if it is unset or returns an error, the app sends the alert by SMTP to `ADMIN_ALERT_EMAIL` (or `SMTP_USERNAME` when no recipient override is set). Never commit webhook, API-key, or SMTP secrets.
+
+The app queues alerts for investment deposit submissions, wallet top-ups, withdrawals, and compliance-case submissions. The Make scenario should accept JSON, send an admin email, then use a **Webhook response** module after Gmail to return JSON `{"delivered":true}` with HTTP 200. The app only treats that explicit response as success; default webhook acknowledgments or failed Make runs trigger the SMTP fallback. Do not include uploaded documents or credentials in alert emails. Retry queued alerts with `php tools/send-admin-alerts.php` from a scheduled job. Inspect pending items without sending using `php tools/send-admin-alerts.php --dry-run`.
+
 The application also requires PHP `mysqli` and a MySQL-compatible database for integration testing; those are not available in the current local CLI environment.
