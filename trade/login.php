@@ -5,57 +5,62 @@ include "../db.php";
 include "../config.php";
 
 $msg = "";
-use PHPMailer\PHPMailer\PHPMailer;
+$showResend = false;
 
 $username_err = $password_err= ""; 
 $username = $password= "";
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
- 
-  if (empty($_POST["username"])) {
+  $submittedUsername = $_POST["username"] ?? "";
+  $submittedPassword = $_POST["password"] ?? "";
+
+  if (!is_string($submittedUsername) || trim($submittedUsername) === "") {
     $username_err = "Username is required";
   } else {
-    $username = test_input($_POST["username"]);
+    $username = trim($submittedUsername);
   }
   
-  if (empty($_POST["password"])) {
+  if (!is_string($submittedPassword) || $submittedPassword === "") {
     $password_err = "Password is required";
   } else {
-    $password = test_input($_POST["password"]);
+    $password = $submittedPassword;
   }
-    
-  $username = $link->real_escape_string($_POST['username']);
-  $password = $link->real_escape_string($_POST['password']);
 
   if($username == "" || $password == ""){
     $msg = "Username or Password fields cannot be empty!";
   } else {
-    $sql1 = "SELECT * FROM users WHERE username='$username' AND password='$password'";
-    $result1 = $link->query($sql1);
-    if(mysqli_num_rows($result1) > 0){
-      $row = mysqli_fetch_array($result1);
-      $_SESSION['email'] = $row['email'];
-      
-      if (empty($row['id_front']) || $row['id_front'] == null || empty($row['id_back']) || $row['id_back'] == null) {
-        header("location: ../account/profile.php");
+    $stmt = $link->prepare('SELECT * FROM users WHERE username = ? AND password = ? LIMIT 1');
+    if (!$stmt) {
+      throw new RuntimeException('Unable to prepare login query: ' . $link->error);
+    }
+    $stmt->bind_param('ss', $username, $password);
+    if (!$stmt->execute()) {
+      throw new RuntimeException('Unable to check login credentials: ' . $stmt->error);
+    }
+    $result1 = $stmt->get_result();
+    $row = $result1->fetch_assoc();
+    $stmt->close();
+
+    if($row){
+      if (empty($row['email_verified'])) {
+        $msg = 'Please verify your email address before logging in.';
+        $showResend = true;
       } else {
-        header("location: ../account/");
+        $_SESSION['email'] = $row['email'];
+
+        if (empty($row['id_front']) || $row['id_front'] == null || empty($row['id_back']) || $row['id_back'] == null) {
+          header("location: ../account/profile.php");
+        } else {
+          header("location: ../account/");
+        }
+        exit();
       }
-      
-      // Email sending code remains the same
-      // ...
     } else {
       $msg = "Email or Password incorrect!";
     }
   }
 }
 
-function test_input($data) {
-  $data = trim($data);
-  $data = stripslashes($data);
-  $data = htmlspecialchars($data);
-  return $data;
-}
 ?>
 
 <!DOCTYPE html>
@@ -117,10 +122,25 @@ function test_input($data) {
       <form class="px-8 py-6" action="" method="POST">
         <?php if($msg != ""): ?>
           <div class="mb-4 p-4 bg-yellow-900 text-yellow-100 rounded-lg">
-            <?php echo $msg; ?>
+            <?php echo htmlspecialchars($msg, ENT_QUOTES, 'UTF-8'); ?>
+            <?php if($showResend): ?>
+              <p class="mt-2"><a class="underline text-primary" href="resend-verification.php">Resend verification email</a></p>
+            <?php endif; ?>
           </div>
         <?php endif; ?>
         
+        <?php if(isset($_GET['registered']) && $msg == ""): ?>
+          <div class="mb-4 p-4 bg-green-900 text-green-100 rounded-lg">
+            Your account has been created. Verify your email before logging in.
+            <?php if(($_GET['mail'] ?? '') === 'failed'): ?>
+              The email could not be sent. Please use the resend link below to request a verification message.
+            <?php else: ?>
+              We sent your welcome and verification emails.
+            <?php endif; ?>
+            <p class="mt-2"><a class="underline text-primary" href="resend-verification.php">Resend verification email</a></p>
+          </div>
+        <?php endif; ?>
+
         <?php if(isset($_GET['success']) && $msg == ""): ?>
           <div class="mb-4 p-4 bg-green-900 text-green-100 rounded-lg">
             You have successfully registered. Kindly login.

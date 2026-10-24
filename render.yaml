@@ -7,6 +7,8 @@ services:
     dockerContext: .
     healthCheckPath: /
     envVars:
+      - key: APP_BASE_URL
+        value: https://redmanfinance.onrender.com
       - key: DB_HOST
         sync: false
       - key: DB_PORT
@@ -25,3 +27,7 @@ services:
         sync: false
       - key: SMTP_PASSWORD
         sync: false
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_ENCRYPTION
+        value: ssl

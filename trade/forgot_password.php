@@ -1,118 +1,90 @@
 <?php
 
-require 'Exception.php';
-require 'PHPMailer.php';
-require 'SMTP.php';
-//Load Composer's autoloader
-require 'vendor/autoload.php';
-//Import PHPMailer classes into the global namespace
-//These must be at the top of your script, not inside a function
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\SMTP;
 use PHPMailer\PHPMailer\Exception;
+use PHPMailer\PHPMailer\PHPMailer;
 
+require_once __DIR__ . '/Exception.php';
+require_once __DIR__ . '/PHPMailer.php';
+require_once __DIR__ . '/SMTP.php';
+require_once __DIR__ . '/email_verification.php';
+include_once __DIR__ . '/../db.php';
 
-session_start();
+$msg = '';
+$email_err = '';
+$email = '';
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $submittedEmail = $_POST['email'] ?? '';
+    $email = is_string($submittedEmail) ? trim($submittedEmail) : '';
 
-include "../db.php";
-include "../config.php";
-
-$msg = "";
-
-$email_err = "";
-$email = "";
-
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    // Validate email
-    if (empty($_POST["email"])) {
-        $email_err = "Email is required";
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $email_err = 'Enter a valid email address.';
     } else {
-        $email = test_input($_POST["email"]);
-        // Check if email is valid
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $email_err = "Invalid email format"; 
+        $msg = 'If an account uses that email address, we sent a password reset link. Check your inbox and spam folder.';
+        $lookup = $link->prepare('SELECT id, username FROM users WHERE email = ? LIMIT 1');
+        if (!$lookup) {
+            throw new RuntimeException('Unable to prepare password reset lookup: ' . $link->error);
         }
-    }
-    
-    if(empty($email_err)) {
-        $email = $link->real_escape_string($_POST['email']);
-        
-        $sql1 = "SELECT * FROM users WHERE email='$email'";
-        $result1 = $link->query($sql1);
-        
-        if(mysqli_num_rows($result1) > 0) {
-            $row = mysqli_fetch_assoc($result1);
-            $password = $row['password'];
-            $username = $row['username'];
-            
-        
+        $lookup->bind_param('s', $email);
+        if (!$lookup->execute()) {
+            throw new RuntimeException('Unable to look up password reset request: ' . $lookup->error);
+        }
+        $lookup->bind_result($userId, $username);
+        $accountFound = $lookup->fetch();
+        $lookup->close();
+
+        if ($accountFound) {
+            $token = bin2hex(random_bytes(32));
+            $tokenHash = hash('sha256', $token);
+            $saveToken = $link->prepare(
+                'UPDATE users
+                 SET password_reset_token_hash = ?, password_reset_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 HOUR)
+                 WHERE id = ?'
+            );
+            if (!$saveToken) {
+                throw new RuntimeException('Unable to prepare password reset token update: ' . $link->error);
+            }
+            $saveToken->bind_param('si', $tokenHash, $userId);
+            if (!$saveToken->execute()) {
+                throw new RuntimeException('Unable to save password reset token: ' . $saveToken->error);
+            }
+            $saveToken->close();
+
+            $baseUrl = rtrim(getenv('APP_BASE_URL') ?: 'https://redmanfinance.onrender.com', '/');
+            $resetUrl = $baseUrl . '/trade/reset_password.php?token=' . rawurlencode($token);
+            $safeUsername = htmlspecialchars((string) $username, ENT_QUOTES, 'UTF-8');
+            $safeResetUrl = htmlspecialchars($resetUrl, ENT_QUOTES, 'UTF-8');
             $mail = new PHPMailer(true);
-            
             try {
-                
-                $mail->isSMTP();
-                $mail->Host       = getenv('SMTP_HOST') ?: '';
-                $mail->SMTPAuth   = true;
-                $mail->Username   = getenv('SMTP_USERNAME') ?: '';
-                $mail->Password   = getenv('SMTP_PASSWORD') ?: '';
-				$mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;            
-				$mail->Port       = 465;   
-                
-          
+                redman_configure_smtp($mail);
                 $mail->setFrom(getenv('SMTP_USERNAME') ?: '', 'Redman Finance');
                 $mail->addAddress($email);
-                
-             
                 $mail->isHTML(true);
-                $mail->Subject = 'Password Recovery - Redman Finance';
-                
-                // Email body with dark theme styling
+                $mail->Subject = 'Reset your Redman Finance password';
                 $mail->Body = '
-                <div style="background: #0D1627; color: #ffffff; padding: 20px; font-family: Arial, sans-serif;">
-                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #f4d35e; border-radius: 5px;">
-                        <div style="background: #1a2639; padding: 20px; text-align: center; border-bottom: 2px solid #f4d35e;">
-                            <img src="https://redmanfinance.org.ng/public/redman%20finance.svg" alt="Redman Finance" style="height: 50px;">
-                            <h2 style="color: #f4d35e; margin-top: 10px;">Password Recovery</h2>
+                    <div style="background:#0D1627;color:#fff;padding:20px;font-family:Arial,sans-serif">
+                        <div style="max-width:600px;margin:0 auto;border:1px solid #f4d35e;border-radius:5px;padding:24px">
+                            <h2 style="color:#f4d35e">Password reset</h2>
+                            <p>Hello ' . $safeUsername . ',</p>
+                            <p>We received a request to reset your Redman Finance password.</p>
+                            <p><a href="' . $safeResetUrl . '" style="background:#f4d35e;color:#0D1627;padding:12px 20px;text-decoration:none;border-radius:5px">Choose a new password</a></p>
+                            <p>This link expires in one hour and can only be used once. If you did not request this, ignore this email.</p>
                         </div>
-                        
-                        <div style="padding: 20px;">
-                            <p>Hello '.$username.',</p>
-                            <p>You requested a password recovery for your Redman Finance account.</p>
-                            
-                            <div style="background: #1a2639; padding: 15px; margin: 20px 0; border-left: 3px solid #f4d35e;">
-                                <p style="margin: 0;">Your password is: <strong>'.$password.'</strong></p>
-                            </div>
-                            
-                            <p>For security reasons, we recommend changing your password after logging in.</p>
-                            <p>If you didn\'t request this, please contact our support team immediately.</p>
-                        </div>
-                        
-                        <div style="background: #1a2639; padding: 15px; text-align: center; border-top: 1px solid #f4d35e; font-size: 12px;">
-                            <p>© '.date('Y').' Redman Finance. All rights reserved.</p>
-                            <p>This is an automated message, please do not reply directly to this email.</p>
-                        </div>
-                    </div>
-                </div>';
-                
-                $mail->AltBody = "Password Recovery\n\nHello $username,\n\nYour Redman Finance account password is: $password\n\nPlease login and change your password for security.\n\nIf you didn't request this, please contact support immediately.";
-                
+                    </div>';
+                $mail->AltBody = "Hello $username,\n\nReset your Redman Finance password using this one-time link:\n$resetUrl\n\nThe link expires in one hour. If you did not request this, ignore this email.";
                 $mail->send();
-                $msg = "We've sent your password to your email address. Please check your inbox (and spam folder).";
-            } catch (Exception $e) {
-                $msg = "Message could not be sent. Mailer Error: {$mail->ErrorInfo}";
+            } catch (Exception $exception) {
+                error_log(
+                    'Password reset email failed for user ' . $userId .
+                    ' using SMTP host ' . ($mail->Host ?: '(empty)') . ':' . $mail->Port .
+                    ' (' . ($mail->SMTPSecure ?: 'no encryption') . '): ' .
+                    $exception->getMessage() . ' ' . $mail->ErrorInfo
+                );
+            } catch (\InvalidArgumentException $exception) {
+                error_log('Password reset email configuration failed: ' . $exception->getMessage());
             }
-        } else {
-            $msg = "Email not found in our system!";
         }
     }
-}
-
-function test_input($data) {
-    $data = trim($data);
-    $data = stripslashes($data);
-    $data = htmlspecialchars($data);
-    return $data;
 }
 ?>
 
@@ -175,7 +147,7 @@ function test_input($data) {
             <form class="px-8 py-6" action="" method="POST">
                 <?php if($msg != ""): ?>
                     <div class="mb-4 p-4 bg-yellow-900 text-yellow-100 rounded-lg">
-                        <?php echo $msg; ?>
+                        <?php echo htmlspecialchars($msg, ENT_QUOTES, 'UTF-8'); ?>
                     </div>
                 <?php endif; ?>
                 
