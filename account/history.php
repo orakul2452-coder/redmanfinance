@@ -216,7 +216,7 @@ function test_input($data) {
                             </thead>
                             <tbody>
                                 <?php 
-                                $sql = "SELECT * FROM btc WHERE email='$email' ORDER BY id DESC";
+                                $sql = "SELECT * FROM btc WHERE email='$email' ORDER BY date DESC, id DESC";
                                 $result = mysqli_query($link,$sql);
                                 if(mysqli_num_rows($result) > 0){
                                     while($row = mysqli_fetch_assoc($result)){   

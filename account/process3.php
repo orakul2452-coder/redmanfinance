@@ -19,6 +19,7 @@ if(isset($_SESSION['email'])){
         $row1 = mysqli_fetch_assoc($result);
         $ubalance = round($row1['walletbalance'],2);
         $uprofit = round($row1['profit'],2);
+        $refcode = (string)($row1['refcode'] ?? '');
         $referred = $row1['referred'];
         $username = $row1['username'];
     } else {
@@ -202,10 +203,12 @@ if(isset($_POST['submit'])){
     $transactionStatus = 'pending';
     $allAmount = '';
     $comment = '';
+    $refcode = (string)($row1['refcode'] ?? '');
+    $referred = (string)($row1['referred'] ?? '');
     $insert = $link->prepare('INSERT INTO btc (plan, account, allamount, mode, usd, cointype, email, status, tnxid, type, comment, refcode, referred, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $insert->bind_param('ssssdssssssssi', $planName, $planName, $allAmount, $currencyName, $amountValue, $currencyName, $email, $transactionStatus, $transactionReference, $transactionType, $comment, $refcode, $referred, $durationValue);
     if (!$insert->execute()) {
-        error_log('Deposit request insert failed: ' . $insert->error);
+        error_log('Investment deposit insert failed for reference ' . $transactionReference . ': ' . $insert->error . ' [' . $insert->errno . ']');
         $insert->close();
         $link->rollback();
         echo '<script>alert(' . json_encode('Unable to record your deposit request. Please try again.') . ');window.location.href="packages.php";</script>';
@@ -236,6 +239,7 @@ if(isset($_POST['submit'])){
         $adminAlertId = 0;
     }
     if (!$link->commit()) {
+        error_log('Investment deposit transaction commit failed for reference ' . $transactionReference . ': ' . $link->error . ' [' . $link->errno . ']');
         $link->rollback();
         echo '<script>alert(' . json_encode('Unable to record your deposit request. Please try again.') . ');window.location.href="packages.php";</script>';
         exit();

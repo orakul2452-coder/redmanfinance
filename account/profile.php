@@ -2,10 +2,13 @@
 session_start();
 include "../db.php";
 include "../config.php";
+require_once "../email_verification.php";
 
 $msg = "";
 $err = "";
 $kycStatus = 'unverified';
+$emailVerified = false;
+$pendingEmail = '';
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
 use PHPMailer\PHPMailer\Exception;
@@ -23,6 +26,8 @@ if(isset($_SESSION['email'])){
         $fname = $row1['fname'];
         $lname = $row1['lname'];
         $username = $row1['username'];
+        $emailVerified = !empty($row1['email_verified']);
+        $pendingEmail = trim((string)($row1['pending_email'] ?? ''));
         $id_front = $row1['id_front'];
         $id_back = $row1['id_back'];
         $kycStatus = $row1['kyc_status'] ?? 'unverified';
@@ -92,6 +97,52 @@ if($row11['total_value'] != ""){
 
 // Handle profile update
 $fname_err = $lname_err = $phone_err = $password_err = $username_err = "";
+
+$_SESSION['email_verification_csrf'] = $_SESSION['email_verification_csrf'] ?? bin2hex(random_bytes(32));
+
+if (isset($_POST['request_email_change']) || isset($_POST['resend_email_verification'])) {
+    $csrfToken = (string)($_POST['email_verification_csrf'] ?? '');
+    if (!hash_equals($_SESSION['email_verification_csrf'], $csrfToken)) {
+        $err = 'Your session expired. Reload this page and try again.';
+    } elseif (isset($_POST['request_email_change'])) {
+        $newEmail = trim((string)($_POST['new_email'] ?? ''));
+        $currentPassword = (string)($_POST['current_password'] ?? '');
+        if (!filter_var($newEmail, FILTER_VALIDATE_EMAIL)) {
+            $err = 'Enter a valid new email address.';
+        } elseif (!hash_equals((string)$row1['password'], $currentPassword)) {
+            $err = 'Your current password is incorrect.';
+        } elseif (strcasecmp($newEmail, $email) === 0) {
+            $err = 'That is already the email address on your account.';
+        } else {
+            $emailCheck = $link->prepare('SELECT id FROM users WHERE (email = ? OR pending_email = ?) AND id <> ? LIMIT 1');
+            $emailCheck->bind_param('ssi', $newEmail, $newEmail, $row1['id']);
+            $emailCheck->execute();
+            $emailInUse = $emailCheck->get_result()->fetch_assoc();
+            $emailCheck->close();
+            if ($emailInUse) {
+                $err = 'That email address is already associated with an account.';
+            } else {
+                try {
+                    redman_email_verification_issue($link, (int)$row1['id'], $newEmail, $newEmail);
+                    $pendingEmail = $newEmail;
+                    $msg = 'A verification link was sent to the new email. Your account email changes after you confirm it.';
+                } catch (Throwable $verificationError) {
+                    error_log('Email-change verification request failed for user ' . (int)$row1['id'] . ': ' . $verificationError->getMessage());
+                    $err = 'Could not send a verification link right now. Please try again later.';
+                }
+            }
+        }
+    } else {
+        try {
+            $verificationRecipient = $pendingEmail !== '' ? $pendingEmail : $email;
+            redman_email_verification_issue($link, (int)$row1['id'], $verificationRecipient, $pendingEmail !== '' ? $pendingEmail : null);
+            $msg = 'A fresh verification link was sent to ' . htmlspecialchars($verificationRecipient, ENT_QUOTES, 'UTF-8') . '.';
+        } catch (Throwable $verificationError) {
+            error_log('Email verification resend failed for user ' . (int)$row1['id'] . ': ' . $verificationError->getMessage());
+            $err = 'Could not send a verification link right now. Please try again later.';
+        }
+    }
+}
 
 if(isset($_POST['submit'])){
     // Validate name
@@ -313,6 +364,41 @@ if(isset($_POST['submit'])){
                             <p><?php echo $msg; ?></p>
                         </div>
                         <?php endif; ?>
+
+                        <section class="mb-6 border border-gray-700 p-4" aria-labelledby="email-verification-heading">
+                            <h3 id="email-verification-heading" class="text-lg font-semibold text-primary mb-2">Email verification</h3>
+                            <p class="text-gray-300">Current email: <strong><?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?></strong></p>
+                            <p class="mt-1 <?php echo $emailVerified ? 'text-green-300' : 'text-amber-300'; ?>">
+                                Status: <strong><?php echo $emailVerified ? 'Verified' : 'Not verified'; ?></strong>
+                            </p>
+                            <?php if ($pendingEmail !== ''): ?>
+                                <p class="mt-2 text-amber-200">Email change awaiting confirmation: <strong><?php echo htmlspecialchars($pendingEmail, ENT_QUOTES, 'UTF-8'); ?></strong></p>
+                            <?php endif; ?>
+                            <div class="mt-4 flex flex-wrap gap-3">
+                                <form method="post">
+                                    <input type="hidden" name="email_verification_csrf" value="<?php echo htmlspecialchars($_SESSION['email_verification_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
+                                    <button type="submit" name="resend_email_verification" class="rounded bg-gray-700 px-4 py-2 text-sm font-medium text-white hover:bg-gray-600">
+                                        <i class="fas fa-envelope mr-2" aria-hidden="true"></i><?php echo $emailVerified && $pendingEmail === '' ? 'Send verification link' : 'Resend verification link'; ?>
+                                    </button>
+                                </form>
+                            </div>
+                            <form method="post" class="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <input type="hidden" name="email_verification_csrf" value="<?php echo htmlspecialchars($_SESSION['email_verification_csrf'], ENT_QUOTES, 'UTF-8'); ?>">
+                                <div>
+                                    <label for="new-email" class="mb-1 block text-sm text-gray-300">New email address</label>
+                                    <input id="new-email" name="new_email" type="email" autocomplete="email" required class="form-input w-full rounded px-3 py-2" value="<?php echo htmlspecialchars($pendingEmail, ENT_QUOTES, 'UTF-8'); ?>">
+                                </div>
+                                <div>
+                                    <label for="current-password-email" class="mb-1 block text-sm text-gray-300">Current password</label>
+                                    <input id="current-password-email" name="current_password" type="password" autocomplete="current-password" required class="form-input w-full rounded px-3 py-2">
+                                </div>
+                                <div class="flex items-end">
+                                    <button type="submit" name="request_email_change" class="w-full rounded bg-primary px-4 py-2 font-medium text-darkbg hover:bg-yellow-500">
+                                        Change email
+                                    </button>
+                                </div>
+                            </form>
+                        </section>
                         
                         <!-- ID Verification Section -->
                         <?php if(empty($id_front) || empty($id_back) || $kycStatus === 'rejected'): ?>

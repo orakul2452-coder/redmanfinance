@@ -16,7 +16,7 @@ function redman_email_enqueue(mysqli $link, string $eventKey, string $recipient,
         'withdrawal_pending', 'withdrawal_approved', 'withdrawal_rejected',
         'kyc_verified', 'kyc_rejected', 'compliance_submitted', 'compliance_more_info', 'risk_hold_started', 'release_cooldown_started', 'vault_released',
         'transfer_sent', 'transfer_received', 'investment_activated', 'investment_completed',
-        'referral_cashback_paid', 'password_reset_requested', 'password_changed',
+        'referral_cashback_paid', 'email_verification', 'password_reset_requested', 'password_changed',
     ];
     if (!in_array($eventType, $allowedEvents, true)) {
         throw new InvalidArgumentException('Unknown email notification event.');
@@ -150,6 +150,24 @@ function redman_email_render(string $eventType, array $payload): array
             $title = 'Referral cashback credited';
             $message = 'A referred customer completed their first qualifying investment. A $500 referral cashback reward has been credited to your account.';
             break;
+        case 'email_verification':
+            $title = 'Verify your email address';
+            $pendingEmail = trim((string)($payload['pending_email'] ?? ''));
+            $tokenSecret = getenv('DB_PASSWORD') ?: getenv('MYSQL_PASSWORD') ?: '';
+            $verificationUserId = filter_var($payload['verification_user_id'] ?? null, FILTER_VALIDATE_INT);
+            $tokenNonce = (string)($payload['verification_token_nonce'] ?? '');
+            $expiresTimestamp = filter_var($payload['verification_expires_timestamp'] ?? null, FILTER_VALIDATE_INT);
+            if ($tokenSecret === '' || $verificationUserId === false || $verificationUserId < 1 || !preg_match('/^[a-f0-9]{64}$/', $tokenNonce) || $expiresTimestamp === false || $expiresTimestamp < time()) {
+                throw new RuntimeException('Email verification message is invalid or expired.');
+            }
+            $token = hash_hmac('sha256', $verificationUserId . ':' . $expiresTimestamp . ':' . $tokenNonce, $tokenSecret);
+            $verificationUrl = rtrim(getenv('APP_BASE_URL') ?: 'https://redmanfinance.onrender.com', '/') . '/trade/verify-email.php?token=' . rawurlencode($token);
+            $message = $pendingEmail !== ''
+                ? 'Confirm this address to update the email on your Redman Finance account to ' . redman_email_escape($pendingEmail) . '.'
+                : 'Confirm that you own this email address to finish setting up your Redman Finance account.';
+            $cta = '<a href="' . redman_email_escape($verificationUrl) . '" style="display:inline-block;padding:12px 18px;background:#f4d35e;color:#101820;text-decoration:none;font-weight:bold">Verify email address</a>';
+            $message .= '<br><br>This link expires in 24 hours. If you did not request this, you can ignore this email.';
+            break;
         case 'password_reset_requested':
             $title = 'Password reset requested';
             $message = 'A password reset was requested for your account. Use the secure one-time link below if this was you.';
@@ -220,6 +238,8 @@ function redman_email_dispatch(mysqli $link, int $id): bool
 
         $mail = new PHPMailer\PHPMailer\PHPMailer(true);
         $mail->isSMTP();
+        $mail->Timeout = 8;
+        $mail->getSMTPInstance()->Timelimit = 8;
         $mail->Host = $host;
         $mail->SMTPAuth = true;
         $mail->Username = $username;

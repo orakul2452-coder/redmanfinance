@@ -4,6 +4,7 @@ include "../db.php";
 include "../config.php";
 
 require_once __DIR__ . '/../email_notifications.php';
+require_once __DIR__ . '/../email_verification.php';
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -199,7 +200,12 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
                   ['name' => $fname, 'detail' => 'Username: ' . $username . '. Account type: ' . $account_type . '. Account number: ' . $accountNumber]
                 );
               } catch (Throwable $mailError) {
-                error_log('Welcome notification queued/delivery failed for user ' . $userId);
+                error_log('Welcome notification failed for user ' . $userId);
+              }
+              try {
+                redman_email_verification_issue($link, $userId, $email);
+              } catch (Throwable $verificationError) {
+                error_log('Registration verification email failed for user ' . $userId);
               }
               header("Location: login.php?success");
               exit();
