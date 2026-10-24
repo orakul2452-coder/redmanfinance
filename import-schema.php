@@ -45,6 +45,7 @@ foreach ($dumpStatements as $statement) {
             fwrite(STDERR, "Could not inline primary key for table $table. No SQL was executed.\n");
             exit(1);
         }
+        $statement = preg_replace('/(`id`\s+int(?:\(\d+\))?\s+NOT NULL)(,)/i', '$1 AUTO_INCREMENT$2', $statement, 1);
         $statement = preg_replace('/^CREATE TABLE `/i', 'CREATE TABLE IF NOT EXISTS `', $statement, 1);
         $statement = preg_replace('/ENGINE=MyISAM/i', 'ENGINE=InnoDB', $statement);
         $statements[] = $statement;
@@ -64,6 +65,20 @@ if (count($primaryKeys) !== 11 || count($statements) !== 22) {
 if (($argv[1] ?? '') === '--check') {
     echo count($primaryKeys) . ' primary keys inlined; ' . substr_count(implode("\n", $statements), 'ENGINE=InnoDB') . ' InnoDB table definitions; ' . count($statements) . " schema statements ready; no SQL executed.\n";
     exit(0);
+}
+
+if (($argv[1] ?? '') === '--print-schema') {
+    $createStatements = array_values(array_filter($statements, static function ($statement) {
+        return preg_match('/^CREATE TABLE /i', $statement) === 1;
+    }));
+    echo "CREATE DATABASE IF NOT EXISTS `redmanfinance`;\nUSE `redmanfinance`;\n\n";
+    echo implode("\n\n", $createStatements) . "\n";
+    exit(0);
+}
+
+if (!$schemaOnly && !in_array('--with-seed-data', $argv, true)) {
+    fwrite(STDERR, "Refusing to import the legacy dump's seed data without --with-seed-data. Use --schema-only to create empty tables.\n");
+    exit(1);
 }
 
 require_once __DIR__ . '/db.php';

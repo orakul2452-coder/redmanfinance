@@ -3,6 +3,8 @@ session_start();
 include "../db.php";
 include "../config.php";
 require_once "../risk.php";
+require_once "../email_notifications.php";
+require_once "../admin_notifications.php";
 
 $msg = "";
 use PHPMailer\PHPMailer\PHPMailer;
@@ -141,79 +143,39 @@ if(isset($_POST['send'])) {
         $updated = $msg === '' && $update && $update->bind_param('dsd', $amount, $email, $amount) && $update->execute() && $update->affected_rows === 1;
         $recorded = $updated && $insert && $insert->bind_param('ssdssssss', $mode, $mode, $amount, $email, $wallet, $tnx, $refcode, $referred, $date) && $insert->execute();
 
+        $notificationId = 0;
+        $adminAlertId = 0;
+        if ($recorded) {
+            try {
+                $adminAlertId = redman_admin_alert_enqueue($link, 'withdrawal-submitted:' . $tnx, 'withdrawal_submitted', [
+                    'customer_email' => $email,
+                    'customer_name' => $username,
+                    'reference' => $tnx,
+                    'amount_usd' => (float)$amount,
+                    'currency' => $mode,
+                    'destination' => $wallet,
+                    'admin_path' => '/admin/c2wad/withdraw.php',
+                ]);
+                $notificationId = redman_email_enqueue($link, 'withdrawal-pending:' . $tnx, $email, 'withdrawal_pending', [
+                    'name' => $username,
+                    'amount' => $amount,
+                    'reference' => $tnx,
+                    'detail' => 'Payment method: ' . $mode,
+                ]);
+            } catch (Throwable $mailError) {
+                $recorded = false;
+                $link->rollback();
+                error_log('Unable to queue withdrawal-pending notification for reference ' . $tnx);
+            }
+        }
+
         if ($recorded && $link->commit()) {
-                // Send confirmation email
-                require 'Exception.php';
-                require 'PHPMailer.php';
-                require 'SMTP.php';
-                
-                $mail = new PHPMailer(true);
-                
-                try {
-                    // Server settings
-                    $mail->isSMTP();
-                    $mail->Host       = getenv('SMTP_HOST') ?: '';
-                    $mail->SMTPAuth   = true;
-                    $mail->Username   = getenv('SMTP_USERNAME') ?: '';
-                    $mail->Password   = getenv('SMTP_PASSWORD') ?: '';
-                    $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;            
-                    $mail->Port       = 465;   
-                    
-                    // Recipients
-                    $mail->setFrom(getenv('SMTP_USERNAME') ?: '', 'Redman Finance');
-                    $mail->addAddress($email);
-                    
-                    // Content
-                    $mail->isHTML(true);
-                    $mail->Subject = 'Withdrawal Request - Redman Finance';
-                    
-                    // Email body with dark theme styling
-                    $show = ($mode == "Perfect Money") ? "account" : "wallet address";
-                    $mail->Body = '
-                    <div style="background: #0D1627; color: #ffffff; padding: 20px; font-family: Arial, sans-serif;">
-                        <div style="max-width: 600px; margin: 0 auto; border: 1px solid #f4d35e; border-radius: 5px;">
-                            <div style="background: #1a2639; padding: 20px; text-align: center; border-bottom: 2px solid #f4d35e;">
-                                <img src="https://redmanfinance.org.ng/public/redman%20finance.svg" alt="Redman Finance" style="height: 50px;">
-                                <h2 style="color: #f4d35e; margin-top: 10px;">Withdrawal Request</h2>
-                            </div>
-                            
-                            <div style="padding: 20px;">
-                                <p>Hello '.$username.',</p>
-                                <p>Your withdrawal request has been received and is being processed.</p>
-                                
-                                <div style="background: #1a2639; padding: 15px; margin: 20px 0; border-left: 3px solid #f4d35e;">
-                                    <p style="margin: 0;">Amount: <strong>$'.$amount.' USD ('.$mode.')</strong></p>
-                                    <p style="margin: 0;">Destination: <strong>'.$wallet.'</strong></p>
-                                    <p style="margin: 0;">Transaction ID: <strong>'.$tnx.'</strong></p>
-                                    <p style="margin: 0;">Status: <strong>Pending Processing</strong></p>
-                                </div>
-                                
-                                <p>Your withdrawal will be processed within 12 hours.</p>
-                                <p>If you have any questions, please contact our support team.</p>
-                            </div>
-                            
-                            <div style="background: #1a2639; padding: 15px; text-align: center; border-top: 1px solid #f4d35e; font-size: 12px;">
-                                <p>© '.date('Y').' Redman Finance. All rights reserved.</p>
-                                <p>This is an automated message, please do not reply directly to this email.</p>
-                            </div>
-                        </div>
-                    </div>';
-                    
-                    $mail->AltBody = "Withdrawal Request\n\nHello $username,\n\nYour withdrawal request of $amount USD ($mode) to $wallet has been received.\nTransaction ID: $tnx\nStatus: Pending Processing\n\nYour withdrawal will be processed within 12 hours.\n\nThank you,\nRedman Finance Team";
-                    
-                    $mail->send();
-                    
-                    echo "<script>
-                        alert('Your withdrawal request of $".$amount." USD (".$mode.") has been submitted successfully.\\nTransaction ID: ".$tnx."\\n\\nAll withdrawals are processed within 12 hours.\\nThanks for choosing Redman Finance');
-                        window.location.href='history.php';
-                    </script>";
-                    
-                } catch (Exception $e) {
-                    echo "<script>
-                        alert('Your withdrawal was recorded but we couldn\\'t send a confirmation email. Please note your transaction ID: ".$tnx."');
-                        window.location.href='history.php';
-                    </script>";
-                }
+            if ($adminAlertId > 0) {
+                redman_admin_alert_dispatch($link, $adminAlertId);
+            }
+            redman_email_dispatch($link, $notificationId);
+            $successMessage = 'Your withdrawal request of $' . number_format($amount, 2) . ' USD (' . $mode . ') has been submitted. Reference: ' . $tnx;
+            echo '<script>alert(' . json_encode($successMessage) . ');window.location.href="history.php";</script>';
         } else {
             $link->rollback();
             if ($msg === '') {
@@ -384,7 +346,7 @@ if(mysqli_num_rows($result) > 0){
                     <div class="card balance-card p-6">
                         <h3 class="text-lg font-semibold text-white mb-2">Withdrawable Balance</h3>
                         <p class="text-gray-300 mb-4">Total Earnings Available for Withdrawal</p>
-                        <h1 class="text-3xl font-bold text-primary">$<?php echo number_format($withdrawable, 2); ?></h1>
+                        <div class="flex items-center justify-between"><h1 class="text-3xl font-bold text-primary" data-private-balance="<?php echo htmlspecialchars(number_format($withdrawable, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</h1><button type="button" data-balance-toggle class="px-3 py-2 text-gray-300 hover:text-white" aria-pressed="false" aria-label="Show balances" title="Show balances"><i class="fa fa-eye" aria-hidden="true"></i></button></div>
                     </div>
                 </div>
                 
@@ -457,6 +419,7 @@ if(mysqli_num_rows($result) > 0){
     </div>
 
     <!-- Scripts -->
+    <script src="assets/js/balance-privacy.js"></script>
     <script>
         const currencySearch = document.getElementById('currency-search');
         const currencySelect = document.querySelector('select[name="currency"]');

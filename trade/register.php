@@ -3,7 +3,8 @@
 include "../db.php";
 include "../config.php";
 
-require_once __DIR__ . '/email_verification.php';
+require_once __DIR__ . '/../email_notifications.php';
+require_once __DIR__ . '/../email_verification.php';
 
 $msg = "";
 
@@ -153,11 +154,20 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
         mysqli_query($link, "DELETE FROM btc WHERE email='$clean_email'");
 
         // Prepare an insert statement
-        $sql = "INSERT INTO users (fname, lname, email, username, password, refcode, session, referred, profit, refbonus, walletbalance, pm, eth, btc, country, phone, zip, account, email_verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)";
+        do {
+          $accountNumber = 'RF' . (string)random_int(1000000000, 9999999999);
+          $accountNumberCheck = mysqli_prepare($link, 'SELECT id FROM users WHERE account_number = ? LIMIT 1');
+          mysqli_stmt_bind_param($accountNumberCheck, 's', $accountNumber);
+          mysqli_stmt_execute($accountNumberCheck);
+          mysqli_stmt_store_result($accountNumberCheck);
+          $accountNumberExists = mysqli_stmt_num_rows($accountNumberCheck) > 0;
+          mysqli_stmt_close($accountNumberCheck);
+        } while ($accountNumberExists);
+        $sql = "INSERT INTO users (fname, lname, email, username, password, refcode, session, referred, profit, refbonus, walletbalance, pm, eth, btc, country, phone, zip, account, account_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
          
         if($stmt = mysqli_prepare($link, $sql)){
             // Bind variables to the prepared statement as parameters
-          mysqli_stmt_bind_param($stmt, "ssssssisdddsssssss", $param_fname, $param_lname, $param_email, $param_username, $param_password, $param_refcode, $param_session, $param_referred, $param_profit, $param_refbonus, $param_walletbalance, $param_pm, $param_eth, $param_btc, $param_country, $param_phone, $param_zip, $param_account);
+          mysqli_stmt_bind_param($stmt, "ssssssisdddssssssss", $param_fname, $param_lname, $param_email, $param_username, $param_password, $param_refcode, $param_session, $param_referred, $param_profit, $param_refbonus, $param_walletbalance, $param_pm, $param_eth, $param_btc, $param_country, $param_phone, $param_zip, $param_account, $param_account_number);
             
             // Set parameters
             $param_fname = $fname;
@@ -178,14 +188,29 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
             $param_phone = $mobile;
             $param_zip = $zip;
             $param_account = $account_type;
+            $param_account_number = $accountNumber;
             
             // Attempt to execute the prepared statement
             if(mysqli_stmt_execute($stmt)){
-                $userId = mysqli_insert_id($link);
-                $verificationSent = redman_send_verification_email($link, $userId, $email, $fname);
-                $welcomeSent = redman_send_welcome_email($email, $fname, $username, $account_type);
-                header('Location: login.php?registered=1&mail=' . ($verificationSent && $welcomeSent ? 'sent' : 'failed'));
-                exit();
+              $userId = (int)mysqli_stmt_insert_id($stmt);
+              try {
+                redman_email_enqueue_and_dispatch(
+                  $link,
+                  'welcome:user:' . $userId,
+                  $email,
+                  'welcome',
+                  ['name' => $fname, 'detail' => 'Username: ' . $username . '. Account type: ' . $account_type . '. Account number: ' . $accountNumber]
+                );
+              } catch (Throwable $mailError) {
+                error_log('Welcome notification failed for user ' . $userId);
+              }
+              try {
+                redman_email_verification_issue($link, $userId, $email);
+              } catch (Throwable $verificationError) {
+                error_log('Registration verification email failed for user ' . $userId);
+              }
+              header("Location: login.php?registered=1");
+              exit();
             } else {
               error_log('Registration insert failed: ' . mysqli_stmt_error($stmt));
                 $msg = "Something went wrong. Please try again later.";
@@ -610,6 +635,10 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
   <footer class="py-4 bg-gray-900 text-gray-300 text-center">
     <p>&copy; 2022 - <script>document.write(new Date().getFullYear())</script> | Redman Finance All Rights Reserved</p>
   </footer>
+
+  <a href="tel:+18167488978" aria-label="Call Redman Finance support" title="Call Redman Finance support" class="whatsapp-float">
+    <i class="fa-solid fa-phone text-2xl"></i>
+  </a>
   
   <!-- jQuery CDN (if still needed for other scripts) -->
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>

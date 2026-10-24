@@ -1,21 +1,11 @@
 <?php
-
-
-require 'Exception.php';
-require 'PHPMailer.php';
-require 'SMTP.php';
-//Load Composer's autoloader
-require 'vendor/autoload.php';
-//Import PHPMailer classes into the global namespace
-//These must be at the top of your script, not inside a function
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\SMTP;
-use PHPMailer\PHPMailer\Exception;
-
 session_start();
 include "../db.php";
 include "../config.php";
 require_once "../risk.php";
+require_once "../email_notifications.php";
+require_once "../referral_rewards.php";
+require_once "../admin_notifications.php";
 
 $msg = "";
 
@@ -29,6 +19,7 @@ if(isset($_SESSION['email'])){
         $row1 = mysqli_fetch_assoc($result);
         $ubalance = round($row1['walletbalance'],2);
         $uprofit = round($row1['profit'],2);
+        $refcode = (string)($row1['refcode'] ?? '');
         $referred = $row1['referred'];
         $username = $row1['username'];
     } else {
@@ -52,6 +43,12 @@ if(isset($_POST['submit'])){
     $pname = $link->real_escape_string($_POST["pname"]);
     $amount = $link->real_escape_string($_POST["amount"]);
     $currency = $link->real_escape_string($_POST["currency"]);
+    $duration = $_POST['duration'] ?? '';
+    if (!redman_is_valid_investment_duration($duration)) {
+        header("location: packages.php");
+        exit();
+    }
+    $duration = (int)$duration;
 
     $sql12 = "SELECT * FROM package1 WHERE pname = '$pname' LIMIT 1";
     $result2 = mysqli_query($link, $sql12);
@@ -61,7 +58,16 @@ if(isset($_POST['submit'])){
         $uduration = $row12['duration'];
         $ufrom = $row12['froms'];
         $uto = $row12['tos'];
+    } else {
+        echo "<script>alert('The selected investment plan is no longer available.'); window.location.href='packages.php';</script>";
+        exit();
     }
+    if ((float)$amount < (float)$ufrom || (float)$amount > (float)$uto || (float)$amount <= 0) {
+        echo "<script>alert('The selected investment amount is outside this plan range.'); window.location.href='packages.php';</script>";
+        exit();
+    }
+    $promoPreview = redman_referral_promo_preview($link, (int)$row1['id'], (float)$amount);
+    $paymentAmount = max(0, (float)$amount - (float)$promoPreview['discount']);
     
     if ($currency == "Account Wallet Balance") {
         $link->begin_transaction();
@@ -76,22 +82,25 @@ if(isset($_POST['submit'])){
             exit();
         }
 
-        $amountValue = (float)$amount;
+        $grossAmount = (float)$amount;
+        $promo = redman_referral_promo_reserve($link, (int)$lockedUser['id'], $grossAmount);
+        $amountValue = max(0, $grossAmount - (float)$promo['discount']);
         $avail_bal = (float)$lockedUser['walletbalance'];
         if ($amountValue <= 0 || $avail_bal < $amountValue) {
             $link->rollback();
-            echo "<script>alert('Insufficient wallet balance! Your available balance is $".number_format($avail_bal, 2)."'); window.location.href='packages.php';</script>";
+            echo "<script>alert('Insufficient wallet balance! Amount due: $".number_format($amountValue, 2).". Your available balance is $".number_format($avail_bal, 2)."'); window.location.href='packages.php';</script>";
             exit();
         }
 
         $cdate = date('Y-m-d H:i:s');
         $cpayday = date('Y/m/d');
         $increaseValue = (float)$uincrease;
-        $durationValue = (int)$uduration;
+        $durationValue = $duration;
         $fromValue = (float)$ufrom;
         $userId = (int)$lockedUser['id'];
         $insertInvestment = $link->prepare("INSERT INTO investment (email, pname, increase, bonus, duration, pdate, froms, activate, usd, profit, payday, lprofit, status) VALUES (?, ?, ?, 0, ?, ?, ?, 1, ?, 0, ?, 0, '')");
         $inserted = $insertInvestment && $insertInvestment->bind_param('ssdisdds', $email, $pname, $increaseValue, $durationValue, $cdate, $fromValue, $amountValue, $cpayday) && $insertInvestment->execute();
+        $investmentId = $inserted ? (int)$insertInvestment->insert_id : 0;
         if ($insertInvestment) {
             $insertInvestment->close();
         }
@@ -100,8 +109,34 @@ if(isset($_POST['submit'])){
         if ($debit) {
             $debit->close();
         }
+        $referralReward = $debited ? redman_referral_promo_finalize($link, $userId, $investmentId) : null;
+        $notificationIds = [];
+        if ($debited) {
+            try {
+                $notificationIds[] = redman_email_enqueue($link, 'investment-activated:' . $investmentId, $email, 'investment_activated', [
+                    'name' => $username,
+                    'amount' => $amountValue,
+                    'reference' => (string)$investmentId,
+                    'detail' => 'Investment activated for ' . redman_investment_duration_options()[$durationValue] . ($promo['discount'] > 0 ? '; $500 referral promotion applied to the amount paid.' : '.'),
+                ]);
+                if ($referralReward) {
+                    $referrer = $referralReward['referrer'];
+                    $notificationIds[] = redman_email_enqueue($link, 'referral-cashback-paid:investment:' . $investmentId, $referrer['email'], 'referral_cashback_paid', [
+                        'name' => trim((string)$referrer['fname'] . ' ' . (string)$referrer['lname']) ?: $referrer['username'],
+                        'amount' => $referralReward['amount'],
+                        'reference' => (string)$investmentId,
+                    ]);
+                }
+            } catch (Throwable $mailError) {
+                error_log('Investment promotion notification queue failed for investment ' . $investmentId);
+            }
+        }
         if ($debited && $link->commit()) {
-            echo "<script>alert('Investment of $".number_format($amountValue, 2)." in ".$pname." activated successfully from your wallet balance!'); window.location.href='mypackages.php';</script>";
+            foreach ($notificationIds as $notificationId) {
+                redman_email_dispatch($link, $notificationId);
+            }
+            $promoMessage = $promo['discount'] > 0 ? ' A $500 referral promotion was applied; the direct referrer received $500 cashback.' : '';
+            echo "<script>alert('Investment of $".number_format($amountValue, 2)." in ".$pname." activated successfully from your wallet balance!".addslashes($promoMessage)."'); window.location.href='mypackages.php';</script>";
             exit();
         }
         $link->rollback();
@@ -131,101 +166,101 @@ if(isset($_POST['submit'])){
         exit();
     }
 } elseif(isset($_POST['send'])){
-    if (empty($_POST["amount"])) {
-        $msg = "Amount is required";
-    } else {
-        $amount = $uamount = $link->real_escape_string($_POST["amount"]);
+    $amountRaw = trim((string)($_POST['amount'] ?? ''));
+    $planName = trim((string)($_POST['pname'] ?? ''));
+    $currencyName = trim((string)($_POST['currency'] ?? ''));
+    $durationRaw = $_POST['duration'] ?? '';
+    if (!preg_match('/^[0-9]+(?:\.[0-9]{1,2})?$/', $amountRaw) || (float)$amountRaw <= 0 || $planName === '' || $currencyName === '' || !redman_is_valid_investment_duration($durationRaw)) {
+        echo '<script>alert(' . json_encode('Enter a valid amount, plan, and payment currency.') . ');window.location.href="packages.php";</script>';
+        exit();
     }
-    
-    if (empty($_POST["pname"])) {
-        $msg = "Package name is required";
-    } else {
-        $pname = $upname = $link->real_escape_string($_POST["pname"]);
+
+    $grossAmount = (float)$amountRaw;
+    $durationValue = (int)$durationRaw;
+    $packageLookup = $link->prepare('SELECT froms, tos FROM package1 WHERE pname = ? LIMIT 1');
+    $packageLookup->bind_param('s', $planName);
+    $packageLookup->execute();
+    $selectedPackage = $packageLookup->get_result()->fetch_assoc();
+    $packageLookup->close();
+    if (!$selectedPackage || $grossAmount < (float)$selectedPackage['froms'] || $grossAmount > (float)$selectedPackage['tos']) {
+        echo '<script>alert(' . json_encode('The selected plan or amount is no longer valid. Please select the plan again.') . ');window.location.href="packages.php";</script>';
+        exit();
     }
-    
-    $currency = $ucurrency = $link->real_escape_string($_POST["currency"]);
-    
-    if(empty($msg)){
-        $tnx = uniqid('tnx');
-        $sql = "INSERT INTO btc (plan, account, allamount, mode, usd, cointype, email, status, tnxid, type, comment, refcode, referred)
-                VALUES ('$upname', '$upname', '', '$ucurrency', '$uamount', '$ucurrency', '$email', 'pending', '$tnx', 'Deposit', '', '', '$referred')";
-        
-        if (mysqli_query($link, $sql)) {
-            $mail = new PHPMailer(true);
-            
-            try {
-                // Server settings
-                $mail->isSMTP();
-                $mail->Host       = getenv('SMTP_HOST') ?: '';
-                $mail->SMTPAuth   = true;
-                $mail->Username   = getenv('SMTP_USERNAME') ?: '';
-                $mail->Password   = getenv('SMTP_PASSWORD') ?: '';
-                $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;            
-                $mail->Port       = 465;   
-                
-                // Recipients
-                $mail->setFrom(getenv('SMTP_USERNAME') ?: '', 'Redman Finance');
-                $mail->addAddress($email);
-                
-                // Content
-                $mail->isHTML(true);
-                $mail->Subject = 'Deposit Alert - Redman Finance';
-                
-                $mail->Body = '
-                <div style="background: #0D1627; color: #ffffff; padding: 20px; font-family: Arial, sans-serif;">
-                    <div style="max-width: 600px; margin: 0 auto; border: 1px solid #f4d35e; border-radius: 5px;">
-                        <div style="background: #1a2639; padding: 20px; text-align: center; border-bottom: 2px solid #f4d35e;">
-                            <img src="https://redmanfinance.org.ng/public/redman%20finance.svg" alt="Redman Finance" style="height: 50px;">
-                            <h2 style="color: #f4d35e; margin-top: 10px;">Deposit Alert</h2>
-                        </div>
-                        
-                        <div style="padding: 20px;">
-                            <p>Hello '.$username.',</p>
-                            <p>Your deposit request has been received and is being processed.</p>
-                            
-                            <div style="background: #1a2639; padding: 15px; margin: 20px 0; border-left: 3px solid #f4d35e;">
-                                <p style="margin: 0;">Amount: <strong>$'.$uamount.' USD ('.$ucurrency.')</strong></p>
-                                <p style="margin: 0;">Transaction ID: <strong>'.$tnx.'</strong></p>
-                                <p style="margin: 0;">Status: <strong>Pending Confirmation</strong></p>
-                            </div>
-                            
-                            <p>Your investment will be activated once your deposit is confirmed by our team.</p>
-                            <p>If you have any questions, please contact our support team.</p>
-                        </div>
-                        
-                        <div style="background: #1a2639; padding: 15px; text-align: center; border-top: 1px solid #f4d35e; font-size: 12px;">
-                            <p>© '.date('Y').' Redman Finance. All rights reserved.</p>
-                            <p>This is an automated message, please do not reply directly to this email.</p>
-                        </div>
-                    </div>
-                </div>';
-                
-                $mail->AltBody = "Deposit Alert\n\nHello $username,\n\nYour deposit of $uamount USD ($ucurrency) is currently under review.\nTransaction ID: $tnx\n\nYour investment will be activated once your deposit is confirmed.\n\nThank you,\nRedman Finance Team";
-                
-                $mail->send();
-                
-                echo "<script>
-                    alert('Your deposit of ".$uamount." USD worth of ".$ucurrency." is currently under review. Your transaction ID is ".$tnx.". Your balance will be credited and your investment will be activated once your deposit is confirmed.');
-                    window.location.href='mypackages.php';
-                </script>";
-                exit();
-                
-            } catch (Exception $e) {
-                echo "<script>
-                    alert('Your deposit was recorded. Transaction ID: ".$tnx."');
-                    window.location.href='mypackages.php';
-                </script>";
-                exit();
-            }
-        } else {
-            $err_msg = addslashes(mysqli_error($link));
-            echo "<script>
-                alert('Database Error: ".$err_msg."');
-                window.location.href='packages.php';
-            </script>";
-            exit();
+    $link->begin_transaction();
+    try {
+        $promo = redman_referral_promo_reserve($link, (int)$row1['id'], $grossAmount);
+        $amountValue = max(0, $grossAmount - (float)$promo['discount']);
+        if ($amountValue <= 0) {
+            throw new RuntimeException('The payable amount is invalid.');
         }
+    } catch (Throwable $promoError) {
+        $link->rollback();
+        echo '<script>alert(' . json_encode('Unable to reserve the referral promotion. Please try again.') . ');window.location.href="packages.php";</script>';
+        exit();
     }
+    $transactionReference = 'tnx' . bin2hex(random_bytes(12));
+    $transactionType = 'Deposit';
+    $transactionStatus = 'pending';
+    $allAmount = '';
+    $comment = '';
+    $refcode = (string)($row1['refcode'] ?? '');
+    $referred = (string)($row1['referred'] ?? '');
+    $insert = $link->prepare('INSERT INTO btc (plan, account, allamount, mode, usd, cointype, email, status, tnxid, type, comment, refcode, referred, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $insert->bind_param('ssssdssssssssi', $planName, $planName, $allAmount, $currencyName, $amountValue, $currencyName, $email, $transactionStatus, $transactionReference, $transactionType, $comment, $refcode, $referred, $durationValue);
+    if (!$insert->execute()) {
+        error_log('Investment deposit insert failed for reference ' . $transactionReference . ': ' . $insert->error . ' [' . $insert->errno . ']');
+        $insert->close();
+        $link->rollback();
+        echo '<script>alert(' . json_encode('Unable to record your deposit request. Please try again.') . ');window.location.href="packages.php";</script>';
+        exit();
+    }
+    $depositId = (int)$insert->insert_id;
+    $insert->close();
+    if ($promo['discount'] > 0 && !redman_referral_promo_bind_deposit($link, (int)$row1['id'], $depositId)) {
+        $link->rollback();
+        echo '<script>alert(' . json_encode('Unable to attach the referral promotion to this deposit. Please try again.') . ');window.location.href="packages.php";</script>';
+        exit();
+    }
+    try {
+        $adminAlertId = redman_admin_alert_enqueue($link, 'investment-deposit-submitted:' . $depositId, 'investment_deposit_submitted', [
+            'customer_email' => $email,
+            'customer_name' => $username,
+            'reference' => $transactionReference,
+            'amount_usd' => $amountValue,
+            'plan_amount_usd' => $grossAmount,
+            'discount_usd' => (float)$promo['discount'],
+            'plan' => $planName,
+            'duration_days' => $durationValue,
+            'payment_method' => $currencyName,
+            'admin_path' => '/admin/c2wad/deposit.php',
+        ]);
+    } catch (Throwable $alertError) {
+        error_log('Unable to queue admin investment-deposit alert for reference ' . $transactionReference);
+        $adminAlertId = 0;
+    }
+    if (!$link->commit()) {
+        error_log('Investment deposit transaction commit failed for reference ' . $transactionReference . ': ' . $link->error . ' [' . $link->errno . ']');
+        $link->rollback();
+        echo '<script>alert(' . json_encode('Unable to record your deposit request. Please try again.') . ');window.location.href="packages.php";</script>';
+        exit();
+    }
+
+    try {
+        if ($adminAlertId > 0) {
+            redman_admin_alert_dispatch($link, $adminAlertId);
+        }
+        $pendingNotificationId = redman_email_enqueue($link, 'deposit-pending:' . $transactionReference, $email, 'deposit_pending', [
+            'name' => $username,
+            'amount' => $amountValue,
+            'reference' => $transactionReference,
+            'detail' => 'Selected investment term: ' . redman_investment_duration_options()[$durationValue] . '. Plan amount: $' . number_format($grossAmount, 2) . ($promo['discount'] > 0 ? '; $500 referral promotion applied. Amount due: $' . number_format($amountValue, 2) : '') . '. Payment method: ' . $currencyName,
+        ]);
+        redman_email_dispatch($link, $pendingNotificationId);
+    } catch (Throwable $mailError) {
+        error_log('Deposit-pending notification failed for reference ' . $transactionReference);
+    }
+    echo '<script>alert(' . json_encode('Your deposit request was recorded and is pending review. Reference: ' . $transactionReference) . ');window.location.href="mypackages.php";</script>';
+    exit();
 } else {
     header("location: packages.php");
     exit();
@@ -390,7 +425,10 @@ function test_input($data) {
                         
                         <div class="payment-info mb-6">
                             <h3 class="text-lg font-semibold text-primary mb-2">Payment Instructions</h3>
-                            <p class="mb-4">Make payment of <span class="font-bold text-primary">$<?php echo $amount; ?></span> to the below <?php echo $currency; ?> <?php echo $addr; ?>:</p>
+                            <p class="mb-4">Make payment of <span class="font-bold text-primary">$<?php echo number_format($paymentAmount, 2); ?></span> to the below <?php echo $currency; ?> <?php echo $addr; ?>:</p>
+                            <?php if (!empty($promoPreview['eligible'])): ?>
+                                <p class="mb-4 text-sm text-green-300">Your $500 referral promotion is applied to this qualifying investment. Investment principal and earnings are based on the amount paid.</p>
+                            <?php endif; ?>
                             
                             <div class="mb-4">
                                 <input type="text" class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded text-white" 
@@ -416,6 +454,7 @@ function test_input($data) {
                             <input type="hidden" value="<?php echo $pname; ?>" name="pname">
                             <input type="hidden" value="<?php echo $amount; ?>" name="amount">
                             <input type="hidden" value="<?php echo $currency; ?>" name="currency">
+                            <input type="hidden" value="<?php echo $duration; ?>" name="duration">
                             
                             <div class="payment-info">
                                 <h3 class="text-lg font-semibold text-primary mb-2">Confirmation</h3>

@@ -200,6 +200,7 @@ function test_input($data) {
                 <div class="card p-6">
                     <div class="flex justify-between items-center mb-6">
                         <h2 class="text-xl font-semibold text-primary">Transaction History</h2>
+                        <button type="button" data-balance-toggle class="px-3 py-2 text-gray-300 hover:text-white" aria-pressed="false" aria-label="Show balances" title="Show balances"><i class="fa fa-eye" aria-hidden="true"></i></button>
                     </div>
                     
                     <div class="overflow-x-auto">
@@ -215,14 +216,14 @@ function test_input($data) {
                             </thead>
                             <tbody>
                                 <?php 
-                                $sql = "SELECT * FROM btc WHERE email='$email' ORDER BY id DESC";
+                                $sql = "SELECT * FROM btc WHERE email='$email' ORDER BY date DESC, id DESC";
                                 $result = mysqli_query($link,$sql);
                                 if(mysqli_num_rows($result) > 0){
                                     while($row = mysqli_fetch_assoc($result)){   
                                 ?>
                                 <tr>
                                     <td><?php echo htmlspecialchars($row['type']); ?></td>
-                                    <td>$<?php echo htmlspecialchars($row['usd']); ?></td>
+                                    <td data-private-balance="<?php echo htmlspecialchars(number_format((float)$row['usd'], 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</td>
                                     <td><?php echo htmlspecialchars($row['account']); ?></td>
                                     <td>
                                         <?php 
@@ -259,6 +260,7 @@ function test_input($data) {
     </div>
 
     <!-- Scripts -->
+    <script src="assets/js/balance-privacy.js"></script>
     <script>
         // Mobile menu toggle
         document.querySelector('.md\\:hidden').addEventListener('click', function() {

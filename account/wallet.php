@@ -2,6 +2,8 @@
 session_start();
 include "../db.php";
 include "../config.php";
+require_once "../email_notifications.php";
+require_once "../admin_notifications.php";
 
 $msg = "";
 if (!isset($_SESSION['email'])) {
@@ -69,6 +71,30 @@ if (isset($_POST['submit'])) {
         $comment = '';
         $insert = $link->prepare("INSERT INTO btc (plan, cointype, allamount, mode, usd, type, email, status, account, comment, tnxid, refcode, referred) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         if ($insert && $insert->bind_param('ssssdssssssss', $plan, $coinType, $allAmount, $mode, $amount, $type, $email, $status, $paymentReference, $comment, $transactionId, $row1['refcode'], $row1['referred']) && $insert->execute()) {
+            try {
+                $adminAlertId = redman_admin_alert_enqueue($link, 'wallet-topup-submitted:' . $transactionId, 'wallet_topup_submitted', [
+                    'customer_email' => $email,
+                    'customer_name' => $row1['username'],
+                    'reference' => $transactionId,
+                    'amount_usd' => (float)$amount,
+                    'payment_method' => $coinType,
+                    'payment_reference' => $paymentReference,
+                    'admin_path' => '/admin/c2wad/wallet_deposits.php',
+                ]);
+                redman_admin_alert_dispatch($link, $adminAlertId);
+            } catch (Throwable $alertError) {
+                error_log('Unable to queue admin wallet-topup alert for reference ' . $transactionId);
+            }
+            try {
+                redman_email_enqueue_and_dispatch($link, 'wallet-topup-pending:' . $transactionId, $email, 'wallet_topup_pending', [
+                    'name' => $row1['username'],
+                    'amount' => (float)$amount,
+                    'reference' => $transactionId,
+                    'detail' => 'Payment method: ' . $coinType,
+                ]);
+            } catch (Throwable $mailError) {
+                error_log('Wallet top-up pending notification failed for reference ' . $transactionId);
+            }
             $msg = "Your wallet top-up request was submitted and is pending confirmation. Reference: " . htmlspecialchars($transactionId, ENT_QUOTES, 'UTF-8');
         } else {
             $msg = "Unable to submit the wallet top-up request. Please try again.";
@@ -88,9 +114,6 @@ if (isset($_POST['submit'])) {
         <meta name="viewport" content="width=device-width" />
 
 
-                                        $result = mysqli_query($link,$sql);
-                                        if(mysqli_num_rows($result) > 0){
-                                            $is_yes = 1;
         <!-- Bootstrap core CSS     -->
         <link href="assets/css/bootstrap.min.css" rel="stylesheet" />
 
@@ -296,6 +319,9 @@ if (isset($_POST['submit'])) {
                             <a href="packages.php"><i class="pe-7s-photo-gallery"></i><p>Investment plans</p></a>
                         </li>
                         <li>
+                            <a href="transfers.php"><i class="pe-7s-refresh-2"></i><p>Transfer funds</p></a>
+                        </li>
+                        <li>
                             <a href="mypackages.php"><i class="pe-7s-photo-gallery"></i><p>My Package</p></a>
                         </li>
                         <li>
@@ -347,6 +373,7 @@ if (isset($_POST['submit'])) {
 
                 <div class="content">
                     <div class="container-fluid">
+                                                            <div class="row"><div class="col-md-12 text-right"><button type="button" data-balance-toggle class="btn btn-default" aria-pressed="false" aria-label="Show balances" title="Show balances"><i class="fa fa-eye" aria-hidden="true"></i></button></div></div>
                                                             <div class="row">
                                     <div class="col-md-4">
                                         <div class="card">
@@ -356,7 +383,7 @@ if (isset($_POST['submit'])) {
                                                 <p class="category">Funds available for investment purchases</p>
                                             </div>
                                             <div class="content" style="text-align: center">
-                                                <h1>$<?php echo number_format($pdbalance, 2);?></h1>
+                                                                <h1 data-private-balance="<?php echo htmlspecialchars(number_format($pdbalance, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</h1>
                                             </div>
                                         </div>
                                     </div>
@@ -369,7 +396,7 @@ if (isset($_POST['submit'])) {
                                                 <p class="category">total earnings so far</p>
                                             </div>
                                             <div class="content" style="text-align: center">
-                                                <h1>$<?php echo number_format($pdprofit, 2);?></h1>
+                                                <h1 data-private-balance="<?php echo htmlspecialchars(number_format($pdprofit, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</h1>
                                             </div>
                                         </div>
                                     </div>
@@ -382,7 +409,7 @@ if (isset($_POST['submit'])) {
                                                 <p class="category">total earnings withdrawn so far</p>
                                             </div>
                                             <div class="content" style="text-align: center">
-                                                <h1>$<?php echo $wbtc1; ?></h1>
+                                                <h1 data-private-balance="<?php echo htmlspecialchars(number_format($wbtc1, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</h1>
                                             </div>
                                         </div>
                                     </div>
@@ -512,7 +539,7 @@ $sec ='<span class="badge" style="padding: 10px 15px; background-color: #dd2525;
                                             <tr class="primary">
 
                                             <td><?php echo $row['email'];?></td>
-							<td>$<?php echo $row['usd'];?></td>
+                            <td data-private-balance="<?php echo htmlspecialchars(number_format((float)$row['usd'], 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</td>
                             <td><?php echo htmlspecialchars($row['mode'] ?? '', ENT_QUOTES, 'UTF-8');?></td>
                             <td><?php echo htmlspecialchars($row['account'] ?? '', ENT_QUOTES, 'UTF-8');?></td>
 								<td><?php echo $sec;?></td>
@@ -552,6 +579,7 @@ $sec ='<span class="badge" style="padding: 10px 15px; background-color: #dd2525;
             </div>
 
 
+    <script src="assets/js/balance-privacy.js"></script>
     </body>
 
     <!--   Core JS Files   -->

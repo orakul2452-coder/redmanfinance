@@ -2,8 +2,76 @@
 session_start();
 
 include "../../conn.php";
+if (isset($_POST['reject'])) {
+  $transactionId = filter_input(INPUT_POST, 'transaction_id', FILTER_VALIDATE_INT);
+  $rejectionReason = trim((string)($_POST['rejection_reason'] ?? ''));
+  $csrfToken = $_POST['csrf_token'] ?? '';
+  if (!$transactionId || !hash_equals($_SESSION['withdrawal_admin_csrf'], $csrfToken) || $rejectionReason === '' || strlen($rejectionReason) > 500) {
+    $msg = 'A valid request and rejection reason (1-500 characters) are required.';
+    $msgType = 'danger';
+  } else {
+    $link->begin_transaction();
+    try {
+      $select = $link->prepare("SELECT email, usd, mode, tnxid, status FROM btc WHERE id = ? AND type = 'Withdrawal' FOR UPDATE");
+      $select->bind_param('i', $transactionId);
+      $select->execute();
+      $withdrawal = $select->get_result()->fetch_assoc();
+      $select->close();
+      if (!$withdrawal || $withdrawal['status'] !== 'pending') {
+        throw new RuntimeException('This withdrawal is missing or already processed.');
+      }
+
+      $userLock = $link->prepare('SELECT id, fname, lname, username, is_on_hold FROM users WHERE email = ? LIMIT 1 FOR UPDATE');
+      $userLock->bind_param('s', $withdrawal['email']);
+      $userLock->execute();
+      $user = $userLock->get_result()->fetch_assoc();
+      $userLock->close();
+      if (!$user) {
+        throw new RuntimeException('The customer account could not be found.');
+      }
+
+      $isHeld = (int)$user['is_on_hold'] === 1;
+      $refund = $link->prepare('UPDATE users SET walletbalance = walletbalance + IF(is_on_hold = 0, ?, 0), vault_balance = vault_balance + IF(is_on_hold = 1, ?, 0) WHERE id = ?');
+      $refund->bind_param('ddi', $withdrawal['usd'], $withdrawal['usd'], $user['id']);
+      $refund->execute();
+      if ($refund->affected_rows !== 1) {
+        $refund->close();
+        throw new RuntimeException('Unable to return the reserved withdrawal amount.');
+      }
+      $refund->close();
+
+      $reject = $link->prepare("UPDATE btc SET status = 'rejected', comment = ? WHERE id = ? AND type = 'Withdrawal' AND status = 'pending'");
+      $reject->bind_param('si', $rejectionReason, $transactionId);
+      $reject->execute();
+      if ($reject->affected_rows !== 1) {
+        $reject->close();
+        throw new RuntimeException('Unable to reject this withdrawal.');
+      }
+      $reject->close();
+
+      $notificationId = redman_email_enqueue($link, 'withdrawal-rejected:' . $transactionId, $withdrawal['email'], 'withdrawal_rejected', [
+        'name' => trim($user['fname'] . ' ' . $user['lname']) ?: $user['username'],
+        'amount' => (float)$withdrawal['usd'],
+        'reference' => $withdrawal['tnxid'],
+        'reason' => $rejectionReason,
+        'refund_location' => $isHeld ? 'vault' : 'wallet',
+      ]);
+      if (!$link->commit()) {
+        throw new RuntimeException('The withdrawal rejection transaction could not be committed.');
+      }
+      redman_email_dispatch($link, $notificationId);
+      $msg = 'Withdrawal rejected, reserved funds returned, and customer notified.';
+    } catch (Throwable $error) {
+      $link->rollback();
+      $msg = $error->getMessage();
+      $msgType = 'danger';
+    }
+  }
+}
+
 include "../../config.php";
 require_once "../../risk.php";
+require_once "../../email_notifications.php";
 
 if(!isset($_SESSION['uid'])){
 	header("location:../c2wadmin/signin.php");
@@ -52,7 +120,7 @@ if (isset($_POST['approve'])) {
   } else {
     $link->begin_transaction();
     try {
-      $select = $link->prepare("SELECT email, usd, mode, account, comment, status FROM btc WHERE id = ? AND type = 'Withdrawal' FOR UPDATE");
+      $select = $link->prepare("SELECT email, usd, mode, account, comment, status, tnxid FROM btc WHERE id = ? AND type = 'Withdrawal' FOR UPDATE");
       if (!$select) {
         throw new RuntimeException("Unable to load the withdrawal request.");
       }
@@ -108,36 +176,22 @@ if (isset($_POST['approve'])) {
         throw new RuntimeException("The withdrawal could not be approved.");
       }
       $approve->close();
+      $userLookup = $link->prepare('SELECT fname, lname, username FROM users WHERE email = ? LIMIT 1');
+      $userLookup->bind_param('s', $withdrawal['email']);
+      $userLookup->execute();
+      $notificationUser = $userLookup->get_result()->fetch_assoc() ?: [];
+      $userLookup->close();
+      $notificationId = redman_email_enqueue($link, 'withdrawal-approved:' . $transactionId, $withdrawal['email'], 'withdrawal_approved', [
+        'name' => trim(($notificationUser['fname'] ?? '') . ' ' . ($notificationUser['lname'] ?? '')) ?: ($notificationUser['username'] ?? 'there'),
+        'amount' => (float)$withdrawal['usd'],
+        'reference' => $withdrawal['tnxid'],
+        'detail' => $approvedAddress,
+      ]);
       if (!$link->commit()) {
         throw new RuntimeException("The withdrawal approval transaction could not be committed.");
       }
+      redman_email_dispatch($link, $notificationId);
       $msg = "Withdrawal approved. Original and approved destination addresses were recorded.";
-
-      try {
-        require_once 'PHPMailer/PHPMailer.php';
-        require_once 'PHPMailer/Exception.php';
-        $userLookup = $link->prepare("SELECT username FROM users WHERE email = ? LIMIT 1");
-        $username = '';
-        if ($userLookup && $userLookup->bind_param('s', $withdrawal['email']) && $userLookup->execute()) {
-          $userLookup->bind_result($username);
-          $userLookup->fetch();
-          $userLookup->close();
-        }
-
-        $mail = new PHPMailer(true);
-        $mail->setFrom($emaila, $name);
-        $mail->addAddress($withdrawal['email'], $username);
-        $mail->Subject = "Withdrawal Request Approval";
-        $mail->isHTML(true);
-        $mail->Body = '<p>Dear ' . htmlspecialchars($username, ENT_QUOTES, 'UTF-8') . ',</p>'
-          . '<p>Your withdrawal request of $' . number_format((float)$withdrawal['usd'], 2) . ' USD ('
-          . htmlspecialchars($withdrawal['mode'], ENT_QUOTES, 'UTF-8') . ') was approved.</p>'
-          . '<p>Approved destination: <strong>' . htmlspecialchars($approvedAddress, ENT_QUOTES, 'UTF-8') . '</strong></p>';
-        $mail->AltBody = 'Your withdrawal of $' . number_format((float)$withdrawal['usd'], 2) . ' USD was approved. Approved destination: ' . $approvedAddress;
-        $mail->send();
-      } catch (Throwable $mailError) {
-        error_log('Withdrawal approval email failed for transaction ' . $transactionId . ': ' . $mailError->getMessage());
-      }
     } catch (Throwable $error) {
       $link->rollback();
       $msg = $error->getMessage();
@@ -294,6 +348,8 @@ if(isset($row['status']) &&  $row['status']== 'approved'){
 	
 	$sec = 'Approved &nbsp;&nbsp;<i style="background-color:green;color:#fff; font-size:20px;" class="fa  fa-check" ></i>';
 
+}elseif(isset($row['status']) && $row['status'] === 'rejected'){
+  $sec = 'Rejected';
 }else{
 $sec ='Pending &nbsp;&nbsp;<i class="fa  fa-refresh" style=" font-size:20px;color:red"></i>';
 
@@ -330,7 +386,7 @@ $sec ='Pending &nbsp;&nbsp;<i class="fa  fa-refresh" style=" font-size:20px;colo
           <button class="btn btn-default btn-xs" type="submit" name="backdate">Save date</button>
         </td>
 			  
-								<td><?php if ($row['status'] === 'pending'): ?><button class="btn btn-primary" type="submit" name="approve"><span class="glyphicon glyphicon-check"> Approve with this address</span></button><?php else: ?>&mdash;<?php endif; ?></td>
+                            <td><?php if ($row['status'] === 'pending'): ?><button class="btn btn-primary" type="submit" name="approve"><span class="glyphicon glyphicon-check"> Approve with this address</span></button><textarea name="rejection_reason" maxlength="500" placeholder="Reason required to reject" style="display:block;min-width:220px;color:#222;margin-top:6px;"></textarea><button class="btn btn-danger btn-sm" type="submit" name="reject" onclick="return this.form.rejection_reason.value.trim().length > 0 || (alert('Enter a rejection reason first.'), false);">Reject and refund</button><?php else: ?>&mdash;<?php endif; ?></td>
 							
     <td><button type="submit" name="delete" class="btn btn-danger"><span class="glyphicon glyphicon-trash"> Delete</span></button></td>
 </form>

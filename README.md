@@ -1,13 +1,11 @@
 # redmanfinance
 # redmanfinance
 
-## Email verification deployment
+## Account email delivery
 
-Before deploying the email-verification changes, apply `migrations/002_email_verification.sql` to the `redmanfinance` database. The migration adds any missing verification columns and can be safely rerun if some columns already exist. Existing accounts remain verified; new registrations must verify their email before login.
+Email verification columns are created by `migrations/007_email_verification.sql`. Before deploying secure password-reset links, apply `migrations/008_password_reset_tokens.sql` to the `redmanfinance` database. It adds only the missing reset-token columns and can be rerun safely.
 
-Before deploying password-reset changes, apply `migrations/003_password_reset_tokens.sql` to the same database. It adds only missing token fields and can be safely rerun. Password recovery now emails a one-time link that expires after one hour instead of emailing the account password. Password values continue to use the existing storage format.
-
-The Render service uses `APP_BASE_URL` to generate links to `/trade/verify-email.php`. Keep it set to the public HTTPS origin for the deployed service. SMTP delivery uses `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`; `SMTP_PORT` defaults to `465` and `SMTP_ENCRYPTION` defaults to `ssl`. Use the host and port/security combination specified by your email provider (`587` with `tls` is common). Users can request a fresh link from the login page or `trade/resend-verification.php`.
+The Render service uses `APP_BASE_URL` to generate account links. SMTP delivery uses `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`; `SMTP_PORT` defaults to `465` and `SMTP_ENCRYPTION` defaults to `ssl`. Set both port and encryption to the combination specified by your provider (commonly `587` and `tls`). Delivery failures are recorded in Render logs with the SMTP host, port, and server error, but never the SMTP password.
 
 ## Risk management migration
 
@@ -20,5 +18,11 @@ Run local database-independent risk checks with:
 ```powershell
 php tests/risk_rules_test.php
 ```
+
+## Admin finance alerts
+
+Apply `migrations/006_admin_alert_outbox.sql` before deploying admin finance alerts. Configure `MAKE_FINANCE_ALERT_WEBHOOK_URL` as a secret environment variable on Render, or enter the Make custom webhook URL when starting the local server with `start-local.ps1`. If API-key authentication is enabled on the Make webhook, set `MAKE_FINANCE_ALERT_WEBHOOK_API_KEY` in the same secret environment. Make is attempted first; if it is unset or returns an error, the app sends the alert by SMTP to `ADMIN_ALERT_EMAIL` (or `SMTP_USERNAME` when no recipient override is set). Never commit webhook, API-key, or SMTP secrets.
+
+The app queues alerts for investment deposit submissions, wallet top-ups, withdrawals, and compliance-case submissions. The Make scenario should accept JSON, send an admin email, then use a **Webhook response** module after Gmail to return JSON `{"delivered":true}` with HTTP 200. The app only treats that explicit response as success; default webhook acknowledgments or failed Make runs trigger the SMTP fallback. Do not include uploaded documents or credentials in alert emails. Retry queued alerts with `php tools/send-admin-alerts.php` from a scheduled job. Inspect pending items without sending using `php tools/send-admin-alerts.php --dry-run`.
 
 The application also requires PHP `mysqli` and a MySQL-compatible database for integration testing; those are not available in the current local CLI environment.

@@ -128,6 +128,11 @@ function test_input($data) {
                     Investment Plans
                 </a>
 
+                <a href="strategies.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-robot mr-3"></i>
+                    AI Strategies
+                </a>
+
                 <a href="wallet.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
                     <i class="fas fa-wallet mr-3"></i>
                     Add Funds
@@ -210,13 +215,18 @@ function test_input($data) {
                                     <span>Daily earnings: <?php echo $row['increase']; ?>%</span>
                                 </div>
                                 <div class="plan-feature">
-                                    <i class="fas fa-calendar-alt"></i>
-                                    <span>Duration: <?php echo $row['duration']; ?> days</span>
-                                </div>
-                                <div class="plan-feature">
                                     <i class="fas fa-check-circle"></i>
                                     <span>Deposit return: Yes</span>
                                 </div>
+                            </div>
+
+                            <div class="mb-5">
+                                <label for="duration-<?php echo (int)$row['id']; ?>" class="block text-sm font-medium text-gray-300 mb-2">Choose investment duration</label>
+                                <select id="duration-<?php echo (int)$row['id']; ?>" name="duration" required class="w-full rounded border border-gray-600 bg-gray-800 px-3 py-2 text-white focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary">
+                                    <?php foreach (redman_investment_duration_options() as $durationDays => $durationLabel): ?>
+                                        <option value="<?php echo $durationDays; ?>" <?php echo (int)$row['duration'] === $durationDays ? 'selected' : ''; ?>><?php echo htmlspecialchars($durationLabel, ENT_QUOTES, 'UTF-8'); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
                             </div>
                             
                             <input type="hidden" name="pname" value="<?php echo $row['pname']; ?>">

@@ -1,7 +1,7 @@
 <?php
 
-include_once __DIR__ . '/../db.php';
-require_once __DIR__ . '/email_verification.php';
+require_once __DIR__ . '/../db.php';
+require_once __DIR__ . '/../email_verification.php';
 
 $message = '';
 $email = '';
@@ -9,25 +9,32 @@ $email = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $submittedEmail = $_POST['email'] ?? '';
     $email = is_string($submittedEmail) ? trim($submittedEmail) : '';
+
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $message = 'Enter a valid email address.';
     } else {
-        $query = $link->prepare('SELECT id, fname FROM users WHERE email = ? AND email_verified = 0 LIMIT 1');
-        if (!$query) {
-            throw new RuntimeException('Unable to prepare resend lookup: ' . $link->error);
+        $lookup = $link->prepare('SELECT id FROM users WHERE email = ? AND email_verified = 0 LIMIT 1');
+        if (!$lookup) {
+            throw new RuntimeException('Unable to prepare verification resend lookup: ' . $link->error);
         }
-        $query->bind_param('s', $email);
-        if (!$query->execute()) {
-            throw new RuntimeException('Unable to look up resend request: ' . $query->error);
+        $lookup->bind_param('s', $email);
+        if (!$lookup->execute()) {
+            throw new RuntimeException('Unable to look up verification resend request: ' . $lookup->error);
         }
-        $query->bind_result($userId, $firstName);
-        $pendingAccount = $query->fetch();
-        $query->close();
+        $lookup->bind_result($userId);
+        $accountFound = $lookup->fetch();
+        $lookup->close();
 
-        if ($pendingAccount && !redman_send_verification_email($link, (int) $userId, $email, (string) $firstName)) {
-            $message = 'We could not send the email right now. Please try again later.';
-        } else {
-            $message = 'If an unverified account uses that email address, a new verification link has been sent.';
+        if ($accountFound) {
+            try {
+                redman_email_verification_issue($link, (int)$userId, $email);
+            } catch (Throwable $error) {
+                error_log('Verification resend failed for user ' . (int)$userId . ': ' . $error->getMessage());
+                $message = 'We could not send the email right now. Please try again later.';
+            }
+        }
+        if ($message === '') {
+            $message = 'If an unverified account uses that email address, a new verification link has been requested.';
         }
     }
 }

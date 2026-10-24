@@ -211,6 +211,11 @@ else{
 </div>
                         </tr>
 
+                        <tr>
+                          <th>Phone</th>
+                          <td colspan="3"><?php if (!empty($row['phone'])): ?><a href="tel:<?php echo rawurlencode((string)$row['phone']); ?>"><?php echo htmlspecialchars((string)$row['phone'], ENT_QUOTES, 'UTF-8'); ?></a><?php else: ?>Not provided<?php endif; ?></td>
+                        </tr>
+
 
 
 

@@ -139,6 +139,7 @@ overflow-x: auto;
                                         <tr>
                                             <th>USERNAME</th>
                                             <th>EMAIL</th>
+                                            <th>PHONE</th>
                                             <th>REFCODE</th>
                                             
                                             <th>REG-DATE </th>
@@ -170,6 +171,7 @@ overflow-x: auto;
                                                                                
                                             <td><?php echo $row['username'];?></td>
                                             <td><?php echo $row['email'];?></td>
+                                            <td><?php echo htmlspecialchars((string)($row['phone'] ?? ''), ENT_QUOTES, 'UTF-8');?></td>
                                             <td><?php echo $row['refcode'];?></td>
                                              <td><?php echo $row['date'];?></td>
                                            <td style="display:none"><input type="hidden" name="email" value="<?php echo $row['email'];?>"</td>

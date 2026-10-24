@@ -46,6 +46,11 @@ $row1 = redman_risk_refresh_hold($link, $email) ?: $row1;
 $accountOnHold = !empty($row1['is_on_hold']);
 $ubalance = round((float)$row1['walletbalance'], 2);
 $uprofit = round((float)$row1['profit'], 2);
+$requestScheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+$requestHost = $_SERVER['HTTP_HOST'] ?? '';
+$isLocalRequest = preg_match('/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i', $requestHost) === 1;
+$referralBaseUrl = $isLocalRequest ? $requestScheme . '://' . $requestHost : $appBaseUrl;
+$referralLink = $referralBaseUrl . '/trade/register.php?ref=' . rawurlencode((string)$refcode);
 
 
 $pdbalance = 0;
@@ -203,15 +208,30 @@ $wbtc1 = 0;
                     <i class="fas fa-chart-line mr-3"></i>
                     Dashboard
                 </a>
+
+                <a href="downline.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-user-friends mr-3"></i>
+                    Referrals
+                </a>
                 
                 <a href="packages.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
                     <i class="fas fa-boxes mr-3"></i>
                     Investment Plans
                 </a>
 
+                <a href="strategies.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-robot mr-3"></i>
+                    AI Strategies
+                </a>
+
                 <a href="wallet.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
                     <i class="fas fa-wallet mr-3"></i>
                     Add Funds
+                </a>
+
+                <a href="transfers.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-exchange-alt mr-3"></i>
+                    Transfer Funds
                 </a>
                 
                 <a href="mypackages.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
@@ -232,6 +252,11 @@ $wbtc1 = 0;
                 <a href="profile.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
                     <i class="fas fa-user mr-3"></i>
                     User Profile
+                </a>
+
+                <a href="compliance.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
+                    <i class="fas fa-clipboard-check mr-3"></i>
+                    Compliance Review
                 </a>
                 
                 <a href="password.php" class="flex items-center px-4 py-3 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800">
@@ -267,17 +292,21 @@ $wbtc1 = 0;
             <?php if ($accountOnHold): ?>
                 <div class="mb-6 border-l-4 border-yellow-400 bg-yellow-900/30 p-4" role="status">
                     <h2 class="font-semibold text-yellow-200">Account under risk review</h2>
-                    <p class="text-gray-200">Earnings and account transactions are paused. Vault balance: $<?php echo number_format((float)$row1['vault_balance'], 2); ?>.</p>
-                    <p class="text-gray-300"><?php echo !empty($row1['hold_release_date']) ? 'Scheduled release: ' . htmlspecialchars($row1['hold_release_date'], ENT_QUOTES, 'UTF-8') : 'Complete KYC review and approved transaction-volume requirements before the release period can begin.'; ?></p>
+                    <p class="text-gray-200">Withdrawals and investment earnings are temporarily paused during review. Vault balance: $<?php echo number_format((float)$row1['vault_balance'], 2); ?>. No new deposit is required to request release of funds already held.</p>
+                    <p class="text-gray-300"><?php echo !empty($row1['hold_release_date']) ? 'Scheduled release: ' . htmlspecialchars($row1['hold_release_date'], ENT_QUOTES, 'UTF-8') : 'Continue your saved compliance review to provide any requested information.'; ?></p>
+                    <a href="compliance.php" class="mt-3 inline-block rounded bg-yellow-300 px-4 py-2 font-semibold text-slate-900">Continue compliance review</a>
                 </div>
             <?php endif; ?>
             <!-- Stats Cards -->
+            <div class="mb-3 flex justify-end">
+                <button type="button" data-balance-toggle class="px-3 py-2 text-gray-300 hover:text-white" aria-pressed="false" aria-label="Show balances" title="Show balances"><i class="fa fa-eye" aria-hidden="true"></i></button>
+            </div>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 <div class="card p-6">
                     <div class="flex flex-col">
                         <h3 class="text-sm font-medium text-gray-400">Wallet Balance</h3>
                         <p class="text-xs text-gray-500 mb-2">Current available balance</p>
-                        <h2 class="text-2xl font-bold text-primary">$<?php echo $ubalance; ?></h2>
+                        <h2 class="text-2xl font-bold text-primary" data-private-balance="<?php echo htmlspecialchars(number_format($ubalance, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</h2>
                     </div>
                 </div>
                 
@@ -285,7 +314,7 @@ $wbtc1 = 0;
                     <div class="flex flex-col">
                         <h3 class="text-sm font-medium text-gray-400">Total Earnings</h3>
                         <p class="text-xs text-gray-500 mb-2">All time profit</p>
-                        <h2 class="text-2xl font-bold text-white">$<?php echo $uprofit; ?></h2>
+                        <h2 class="text-2xl font-bold text-white" data-private-balance="<?php echo htmlspecialchars(number_format($uprofit, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</h2>
                     </div>
                 </div>
                 
@@ -293,23 +322,27 @@ $wbtc1 = 0;
                     <div class="flex flex-col">
                         <h3 class="text-sm font-medium text-gray-400">Total Withdrawn</h3>
                         <p class="text-xs text-gray-500 mb-2">All time withdrawals</p>
-                        <h2 class="text-2xl font-bold text-primary">$<?php echo $wbtc1; ?></h2>
+                        <h2 class="text-2xl font-bold text-primary" data-private-balance="<?php echo htmlspecialchars(number_format((float)$wbtc1, 2, '.', ''), ENT_QUOTES, 'UTF-8'); ?>">••••••</h2>
                     </div>
                 </div>
             </div>
 
-            <!-- Referral Section -->
-            <!-- <div class="card p-6 mb-8">
-                <h3 class="text-lg font-medium text-gray-100 mb-4">Referral Link</h3>
-                <div class="flex flex-col md:flex-row gap-4">
-                    <input type="text" class="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded text-white" 
-                           value="#=<?php echo $refcode; ?>" id="myInputs" readonly>
-                    <button onclick="myFunctions()" 
-                            class="px-4 py-2 bg-primary text-darkbg font-medium rounded hover:bg-yellow-600 transition">
-                        Copy Referral Link
+            <section class="card p-6 mb-8" aria-labelledby="referral-link-heading">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 id="referral-link-heading" class="text-lg font-semibold text-gray-100">Your referral link</h2>
+                        <p class="mt-1 text-sm text-gray-400">Share this link so new customers are attributed to your account when they register.</p>
+                    </div>
+                    <a href="downline.php" class="text-sm font-medium text-primary hover:text-yellow-300">Referral activity</a>
+                </div>
+                <div class="mt-4 flex flex-col gap-3 sm:flex-row">
+                    <input type="text" class="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800 px-4 py-2 text-sm text-white" value="<?php echo htmlspecialchars($referralLink, ENT_QUOTES, 'UTF-8'); ?>" id="referralLink" readonly aria-label="Your referral registration link">
+                    <button type="button" onclick="copyReferralLink()" class="rounded bg-primary px-4 py-2 text-sm font-semibold text-darkbg hover:bg-yellow-500">
+                        <i class="fas fa-copy mr-2" aria-hidden="true"></i>Copy link
                     </button>
                 </div>
-            </div> -->
+                <p id="referral-copy-status" class="mt-2 text-sm text-gray-400" role="status" aria-live="polite"></p>
+            </section>
 
             <!-- TradingView Widget -->
             <div class="card p-0 overflow-hidden">
@@ -352,12 +385,20 @@ $wbtc1 = 0;
     </div>
 
     <!-- Scripts -->
+    <script src="assets/js/balance-privacy.js"></script>
     <script>
-        function myFunctions() {
-            var copyText = document.getElementById("myInputs");
-            copyText.select();
-            document.execCommand("copy");
-            alert("Copied referral link: " + copyText.value);
+        async function copyReferralLink() {
+            var referralInput = document.getElementById('referralLink');
+            var status = document.getElementById('referral-copy-status');
+            try {
+                await navigator.clipboard.writeText(referralInput.value);
+                status.textContent = 'Referral link copied.';
+            } catch (error) {
+                referralInput.focus();
+                referralInput.select();
+                document.execCommand('copy');
+                status.textContent = 'Referral link copied.';
+            }
         }
         
         // Mobile menu toggle

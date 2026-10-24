@@ -11,75 +11,44 @@ $email = $password= "";
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
  
-  if (empty($_POST["email"])) {
-    $email_err = "Email is required";
+	if (empty($_POST["email"])) {
+		$email_err = "Admin email is required";
   } else {
-    $email = test_input($_POST["email"]);
-    // check if e-mail address is well-formed
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-      $email_err = "Invalid email format"; 
-    }
+		$email = trim((string)$_POST["email"]);
+		if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+			$email_err = "Enter the admin email address";
+		}
   }
   
   
    if (empty($_POST["password"])) {
     $password_err = "Password is required";
   } else {
-    $password = test_input($_POST["password"]);
-    // check if name only contains letters and whitespace
-   
+		$password = (string)$_POST["password"];
   }
-    
-		
-	$email = $link->real_escape_string($_POST['email']);
-	$password = $link->real_escape_string($_POST['password']);
-	
-	
-	if($email == "" || $password == ""){
-		$msg = "Email or Password fields cannot be empty!";
-		
-	}else {
-		
-					
-	$sql = "SELECT id FROM admin WHERE email = ?  AND password = ? LIMIT 1";
 
-                 if($stmt = $link->prepare($sql)){
-						// Bind variables to the prepared statement as parameters
-						$stmt->bind_param('ss',$email,$password);
-						$stmt->execute();
-						
-						/* Store the result (to get properties) */
-                            $stmt->store_result();
-                            
-						/* Bind the result to variables */
-          
+	if ($email_err === "" && $password_err === "") {
+		$stmt = $link->prepare("SELECT id, password FROM admin WHERE email = ? LIMIT 1");
+		if ($stmt) {
+			$stmt->bind_param('s', $email);
+			$stmt->execute();
+			$admin = $stmt->get_result()->fetch_assoc();
+			$stmt->close();
 
-							
-							if($stmt->num_rows == 1){
-                          $stmt->bind_result($id);
-						
-						while ($stmt->fetch()) {
-        $id1 = $id;
-   }
+			$storedPassword = (string)($admin['password'] ?? '');
+			$passwordMatches = $admin && hash_equals($storedPassword, $password);
 
-	             
-				    $_SESSION['uid']=$id1;
-				  
-
-					header("location:../c2wad/index.php");
-				
-				
-			}else{
-				
-				$msg = "Email or Password incorrect!";
+			if ($passwordMatches) {
+				session_regenerate_id(true);
+				$_SESSION['uid'] = (int)$admin['id'];
+				header("Location: ../c2wad/index.php");
+				exit();
 			}
-			
-		
-			 
-		}else{
-			$msg = "Database Query Error: " . ($link->error ?: "Could not prepare statement.");
+
+			$msg = "Email or password incorrect. If this is a new database, create an admin account first.";
+		} else {
+			$msg = "Database query error. Please try again later.";
 		}
-		
 	}
 }
 	
@@ -146,11 +115,11 @@ function test_input($data) {
 														
 															
 															
-																<input id="inp" type="email" name="email" placeholder="E-mail" >
+																<input id="inp" type="email" name="email" placeholder="Admin email" autocomplete="username" required>
                                                                 <span class="help-block"><?php echo $email_err; ?></span>
                                                                
 															   
-																<input id="inp" type="password" name="password" placeholder="Password">
+																<input id="inp" type="password" name="password" placeholder="Password" autocomplete="current-password" required>
                                                                 <span class="help-block"><?php echo $password_err; ?></span>
 
 																

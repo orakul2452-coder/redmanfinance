@@ -192,7 +192,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
   <footer class="py-4 bg-gray-900 text-gray-300 text-center">
     <p>&copy; 2013 - <script>document.write(new Date().getFullYear())</script> | Redman Finance All Rights Reserved</p>
   </footer>
-  
+
+  <a href="tel:+18167488978" aria-label="Call Redman Finance support" title="Call Redman Finance support" class="whatsapp-float">
+    <i class="fa-solid fa-phone text-2xl"></i>
+  </a>
   
   <!-- jQuery CDN (if still needed for other scripts) -->
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
