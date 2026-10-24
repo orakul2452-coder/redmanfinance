@@ -28,9 +28,9 @@ services:
       - key: SMTP_PASSWORD
         sync: false
       - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_PORT_FALLBACK
         value: "465"
-      - key: SMTP_ENCRYPTION
-        value: ssl
       - key: MAKE_FINANCE_ALERT_WEBHOOK_URL
         sync: false
       - key: MAKE_FINANCE_ALERT_WEBHOOK_API_KEY

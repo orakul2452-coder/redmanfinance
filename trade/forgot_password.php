@@ -1,12 +1,8 @@
 <?php
 
-use PHPMailer\PHPMailer\Exception;
 use PHPMailer\PHPMailer\PHPMailer;
 
-require_once __DIR__ . '/Exception.php';
-require_once __DIR__ . '/PHPMailer.php';
-require_once __DIR__ . '/SMTP.php';
-require_once __DIR__ . '/email_verification.php';
+require_once __DIR__ . '/../email_notifications.php';
 include_once __DIR__ . '/../db.php';
 
 $msg = '';
@@ -54,34 +50,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $resetUrl = $baseUrl . '/trade/reset_password.php?token=' . rawurlencode($token);
             $safeUsername = htmlspecialchars((string) $username, ENT_QUOTES, 'UTF-8');
             $safeResetUrl = htmlspecialchars($resetUrl, ENT_QUOTES, 'UTF-8');
-            $mail = new PHPMailer(true);
             try {
-                redman_configure_smtp($mail);
-                $mail->setFrom(getenv('SMTP_USERNAME') ?: '', 'Redman Finance');
-                $mail->addAddress($email);
-                $mail->isHTML(true);
-                $mail->Subject = 'Reset your Redman Finance password';
-                $mail->Body = '
-                    <div style="background:#0D1627;color:#fff;padding:20px;font-family:Arial,sans-serif">
-                        <div style="max-width:600px;margin:0 auto;border:1px solid #f4d35e;border-radius:5px;padding:24px">
-                            <h2 style="color:#f4d35e">Password reset</h2>
-                            <p>Hello ' . $safeUsername . ',</p>
-                            <p>We received a request to reset your Redman Finance password.</p>
-                            <p><a href="' . $safeResetUrl . '" style="background:#f4d35e;color:#0D1627;padding:12px 20px;text-decoration:none;border-radius:5px">Choose a new password</a></p>
-                            <p>This link expires in one hour and can only be used once. If you did not request this, ignore this email.</p>
-                        </div>
-                    </div>';
-                $mail->AltBody = "Hello $username,\n\nReset your Redman Finance password using this one-time link:\n$resetUrl\n\nThe link expires in one hour. If you did not request this, ignore this email.";
-                $mail->send();
-            } catch (Exception $exception) {
-                error_log(
-                    'Password reset email failed for user ' . $userId .
-                    ' using SMTP host ' . ($mail->Host ?: '(empty)') . ':' . $mail->Port .
-                    ' (' . ($mail->SMTPSecure ?: 'no encryption') . '): ' .
-                    $exception->getMessage() . ' ' . $mail->ErrorInfo
-                );
-            } catch (\InvalidArgumentException $exception) {
-                error_log('Password reset email configuration failed: ' . $exception->getMessage());
+                redman_email_send_with_smtp_fallback(static function () use ($email, $safeUsername, $safeResetUrl, $username, $resetUrl) {
+                    $mail = new PHPMailer(true);
+                    $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: (getenv('SMTP_USERNAME') ?: ''), getenv('MAIL_FROM_NAME') ?: 'Redman Finance');
+                    $mail->addAddress($email);
+                    $mail->isHTML(true);
+                    $mail->Subject = 'Reset your Redman Finance password';
+                    $mail->Body = '
+                        <div style="background:#0D1627;color:#fff;padding:20px;font-family:Arial,sans-serif">
+                            <div style="max-width:600px;margin:0 auto;border:1px solid #f4d35e;border-radius:5px;padding:24px">
+                                <h2 style="color:#f4d35e">Password reset</h2>
+                                <p>Hello ' . $safeUsername . ',</p>
+                                <p>We received a request to reset your Redman Finance password.</p>
+                                <p><a href="' . $safeResetUrl . '" style="background:#f4d35e;color:#0D1627;padding:12px 20px;text-decoration:none;border-radius:5px">Choose a new password</a></p>
+                                <p>This link expires in one hour and can only be used once. If you did not request this, ignore this email.</p>
+                            </div>
+                        </div>';
+                    $mail->AltBody = "Hello $username,\n\nReset your Redman Finance password using this one-time link:\n$resetUrl\n\nThe link expires in one hour. If you did not request this, ignore this email.";
+                    return $mail;
+                }, 'Password reset email for user ' . $userId);
+            } catch (\Throwable $exception) {
+                error_log('Password reset email could not be delivered: ' . $exception->getMessage());
             }
         }
     }

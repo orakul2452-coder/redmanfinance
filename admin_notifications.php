@@ -3,6 +3,7 @@
 require_once __DIR__ . '/PHPMailer/Exception.php';
 require_once __DIR__ . '/PHPMailer/PHPMailer.php';
 require_once __DIR__ . '/PHPMailer/SMTP.php';
+require_once __DIR__ . '/email_notifications.php';
 
 function redman_admin_alert_enqueue(mysqli $link, string $eventKey, string $eventType, array $payload): int
 {
@@ -43,9 +44,8 @@ function redman_admin_alert_send_email(array $alert): bool
     $smtpHost = trim((string)(getenv('SMTP_HOST') ?: ''));
     $smtpUsername = trim((string)(getenv('SMTP_USERNAME') ?: ''));
     $smtpPassword = (string)(getenv('SMTP_PASSWORD') ?: '');
-    $smtpPort = (int)(getenv('SMTP_PORT') ?: 465);
     $recipient = trim((string)(getenv('ADMIN_ALERT_EMAIL') ?: $smtpUsername));
-    if ($smtpHost === '' || $smtpUsername === '' || $smtpPassword === '' || !in_array($smtpPort, [465, 587], true) || !filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+    if ($smtpHost === '' || $smtpUsername === '' || $smtpPassword === '' || !filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
         return false;
     }
 
@@ -82,25 +82,22 @@ function redman_admin_alert_send_email(array $alert): bool
     }
 
     try {
-        $mail = new PHPMailer\PHPMailer\PHPMailer(true);
-        $mail->isSMTP();
-        $mail->Host = $smtpHost;
-        $mail->SMTPAuth = true;
-        $mail->Username = $smtpUsername;
-        $mail->Password = $smtpPassword;
-        $mail->Port = $smtpPort;
-        $mail->SMTPSecure = $smtpPort === 465 ? PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS : PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: $smtpUsername, getenv('MAIL_FROM_NAME') ?: 'Redman Finance');
-        $mail->addAddress($recipient);
-        $mail->isHTML(true);
         $title = $eventTitles[$eventType] ?? 'Finance activity requires review';
-        $mail->Subject = '[Redman Finance] ' . $title;
-        $mail->Body = '<!doctype html><html><body style="margin:0;background:#f2f4f5;color:#19242b;font-family:Arial,sans-serif"><div style="max-width:640px;margin:24px auto;background:#fff;border:1px solid #d7dfe2"><header style="padding:20px;background:#11212b;color:#fff"><div style="font-size:12px;color:#cbd5e1">REDMAN FINANCE | ADMIN ALERT</div><h1 style="margin:10px 0 0;font-size:22px">' . htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h1></header><main style="padding:22px"><p>A new finance or compliance request needs review.</p><table style="width:100%;border-collapse:collapse">' . $rows . '</table><p style="margin:22px 0"><a href="' . htmlspecialchars($adminUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="display:inline-block;padding:12px 18px;background:#f4d35e;color:#101820;text-decoration:none;font-weight:bold">Open admin review</a></p></main><footer style="padding:14px;background:#edf1f2;color:#586970;font-size:12px">Automated operational alert. Do not reply to this email.</footer></div></body></html>';
-        $mail->AltBody = "REDMAN FINANCE ADMIN ALERT\n{$title}\n\n" . implode("\n", $plainRows) . "\n\nReview: {$adminUrl}";
-        $mail->send();
+        $html = '<!doctype html><html><body style="margin:0;background:#f2f4f5;color:#19242b;font-family:Arial,sans-serif"><div style="max-width:640px;margin:24px auto;background:#fff;border:1px solid #d7dfe2"><header style="padding:20px;background:#11212b;color:#fff"><div style="font-size:12px;color:#cbd5e1">REDMAN FINANCE | ADMIN ALERT</div><h1 style="margin:10px 0 0;font-size:22px">' . htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h1></header><main style="padding:22px"><p>A new finance or compliance request needs review.</p><table style="width:100%;border-collapse:collapse">' . $rows . '</table><p style="margin:22px 0"><a href="' . htmlspecialchars($adminUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '" style="display:inline-block;padding:12px 18px;background:#f4d35e;color:#101820;text-decoration:none;font-weight:bold">Open admin review</a></p></main><footer style="padding:14px;background:#edf1f2;color:#586970;font-size:12px">Automated operational alert. Do not reply to this email.</footer></div></body></html>';
+        $plain = "REDMAN FINANCE ADMIN ALERT\n{$title}\n\n" . implode("\n", $plainRows) . "\n\nReview: {$adminUrl}";
+        redman_email_send_with_smtp_fallback(static function () use ($recipient, $title, $html, $plain, $smtpUsername) {
+            $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+            $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: $smtpUsername, getenv('MAIL_FROM_NAME') ?: 'Redman Finance');
+            $mail->addAddress($recipient);
+            $mail->isHTML(true);
+            $mail->Subject = '[Redman Finance] ' . $title;
+            $mail->Body = $html;
+            $mail->AltBody = $plain;
+            return $mail;
+        }, 'Admin alert email for event ' . $eventType);
         return true;
     } catch (Throwable $error) {
-        error_log('Admin alert SMTP fallback failed for event ' . $eventType);
+        error_log('Admin alert email could not be delivered for event ' . $eventType . ': ' . $error->getMessage());
         return false;
     }
 }

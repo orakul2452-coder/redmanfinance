@@ -5,7 +5,7 @@
 
 Email verification columns are created by `migrations/007_email_verification.sql`. Before deploying secure password-reset links, apply `migrations/008_password_reset_tokens.sql` to the `redmanfinance` database. It adds only the missing reset-token columns and can be rerun safely.
 
-The Render service uses `APP_BASE_URL` to generate account links. SMTP delivery uses `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`; `SMTP_PORT` defaults to `465` and `SMTP_ENCRYPTION` defaults to `ssl`. Set both port and encryption to the combination specified by your provider (commonly `587` and `tls`). Delivery failures are recorded in Render logs with the SMTP host, port, and server error, but never the SMTP password.
+The Render service uses `APP_BASE_URL` to generate account links. SMTP delivery uses `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`. It tries `SMTP_PORT` first (default `587`) and then `SMTP_PORT_FALLBACK` (default `465`); each port automatically uses its corresponding encryption (STARTTLS on 587, implicit TLS on 465). Delivery failures are recorded in Render logs with the port and server error, but never the SMTP password.
 
 ## Risk management migration
 

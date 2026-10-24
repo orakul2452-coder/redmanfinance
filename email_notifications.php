@@ -4,6 +4,67 @@ require_once __DIR__ . '/PHPMailer/Exception.php';
 require_once __DIR__ . '/PHPMailer/PHPMailer.php';
 require_once __DIR__ . '/PHPMailer/SMTP.php';
 
+function redman_smtp_ports(): array
+{
+    $primarySetting = getenv('SMTP_PORT') ?: '587';
+    $primary = filter_var($primarySetting, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+    if ($primary === false || !in_array($primary, [465, 587], true)) {
+        throw new InvalidArgumentException('SMTP_PORT must be 465 or 587.');
+    }
+
+    $fallbackSetting = getenv('SMTP_PORT_FALLBACK') ?: (string)($primary === 465 ? 587 : 465);
+    $fallback = filter_var($fallbackSetting, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+    if ($fallback === false || !in_array($fallback, [465, 587], true) || $fallback === $primary) {
+        throw new InvalidArgumentException('SMTP_PORT_FALLBACK must be the other port: 465 or 587.');
+    }
+
+    return [$primary, $fallback];
+}
+
+function redman_email_send_with_smtp_fallback(callable $configureMessage, string $context): void
+{
+    $ports = redman_smtp_ports();
+    $host = getenv('SMTP_HOST') ?: '';
+    $username = getenv('SMTP_USERNAME') ?: '';
+    $password = getenv('SMTP_PASSWORD') ?: '';
+    if ($host === '' || $username === '' || $password === '') {
+        throw new RuntimeException('SMTP_HOST, SMTP_USERNAME, and SMTP_PASSWORD must be configured.');
+    }
+    $lastError = null;
+
+    foreach ($ports as $attempt => $port) {
+        try {
+            $mail = $configureMessage();
+            if (!$mail instanceof PHPMailer\PHPMailer\PHPMailer) {
+                throw new RuntimeException('SMTP message factory must return a PHPMailer instance.');
+            }
+            $mail->isSMTP();
+            $mail->Timeout = 8;
+            $mail->getSMTPInstance()->Timelimit = 8;
+            $mail->Host = $host;
+            $mail->SMTPAuth = true;
+            $mail->Username = $username;
+            $mail->Password = $password;
+            $mail->Port = $port;
+            $mail->SMTPSecure = $port === 465 ? 'ssl' : 'tls';
+            $mail->send();
+
+            if ($attempt > 0) {
+                error_log($context . ' succeeded using SMTP fallback port ' . $port . '.');
+            }
+            return;
+        } catch (Throwable $error) {
+            $lastError = $error;
+            error_log(
+                $context . ' failed using SMTP host ' . ($host !== '' ? $host : '(empty)') .
+                ':' . $port . ' (' . ($port === 465 ? 'ssl' : 'tls') . '): ' . $error->getMessage()
+            );
+        }
+    }
+
+    throw new RuntimeException($context . ' failed using both SMTP ports.', 0, $lastError);
+}
+
 function redman_email_enqueue(mysqli $link, string $eventKey, string $recipient, string $eventType, array $payload): int
 {
     if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
@@ -225,39 +286,19 @@ function redman_email_dispatch(mysqli $link, int $id): bool
         return false;
     }
 
-    $host = getenv('SMTP_HOST') ?: '';
-    $port = (int)(getenv('SMTP_PORT') ?: 465);
-    $encryption = strtolower(getenv('SMTP_ENCRYPTION') ?: ($port === 465 ? 'ssl' : 'tls'));
-
     try {
         $payload = json_decode((string)$row['payload'], true, 512, JSON_THROW_ON_ERROR);
         [$subject, $html, $plain] = redman_email_render((string)$row['event_type'], $payload);
-        $username = getenv('SMTP_USERNAME') ?: '';
-        $password = getenv('SMTP_PASSWORD') ?: '';
-        if ($username === '' || $password === '' || $host === '' || !in_array($port, [465, 587], true)) {
-            throw new RuntimeException('SMTP environment is incomplete.');
-        }
-        if (!in_array($encryption, ['ssl', 'tls'], true)) {
-            throw new RuntimeException('SMTP_ENCRYPTION must be either ssl or tls.');
-        }
-
-        $mail = new PHPMailer\PHPMailer\PHPMailer(true);
-        $mail->isSMTP();
-        $mail->Timeout = 8;
-        $mail->getSMTPInstance()->Timelimit = 8;
-        $mail->Host = $host;
-        $mail->SMTPAuth = true;
-        $mail->Username = $username;
-        $mail->Password = $password;
-        $mail->Port = $port;
-        $mail->SMTPSecure = $encryption === 'ssl' ? PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS : PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: $username, getenv('MAIL_FROM_NAME') ?: 'Redman Finance');
-        $mail->addAddress((string)$row['recipient_email']);
-        $mail->isHTML(true);
-        $mail->Subject = $subject;
-        $mail->Body = $html;
-        $mail->AltBody = $plain;
-        $mail->send();
+        redman_email_send_with_smtp_fallback(static function () use ($row, $subject, $html, $plain) {
+            $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+            $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: (getenv('SMTP_USERNAME') ?: ''), getenv('MAIL_FROM_NAME') ?: 'Redman Finance');
+            $mail->addAddress((string)$row['recipient_email']);
+            $mail->isHTML(true);
+            $mail->Subject = $subject;
+            $mail->Body = $html;
+            $mail->AltBody = $plain;
+            return $mail;
+        }, 'Email outbox ' . $id . ' event ' . $row['event_type']);
 
         $sent = $link->prepare("UPDATE email_outbox SET status = 'sent', sent_at = NOW(), last_error = NULL WHERE id = ? AND status = 'sending'");
         $sent->bind_param('i', $id);
@@ -272,12 +313,7 @@ function redman_email_dispatch(mysqli $link, int $id): bool
         $failed->bind_param('sisi', $nextStatus, $delayMinutes, $safeError, $id);
         $failed->execute();
         $failed->close();
-        error_log(
-            'Email delivery failed for outbox id ' . $id .
-            ' event ' . $row['event_type'] .
-            ' via ' . ($host !== '' ? $host : '(empty SMTP_HOST)') . ':' . $port .
-            ' (' . ($encryption ?? 'unknown') . '): ' . $error->getMessage()
-        );
+        error_log('Email delivery failed for outbox id ' . $id . ' event ' . $row['event_type'] . ': ' . $error->getMessage());
         return false;
     }
 }

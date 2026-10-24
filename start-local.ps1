@@ -27,12 +27,13 @@ finally {
 
 $smtpHostInput = Read-Host 'SMTP host [smtp.gmail.com]'
 $env:SMTP_HOST = if ([string]::IsNullOrWhiteSpace($smtpHostInput)) { 'smtp.gmail.com' } else { $smtpHostInput.Trim() }
-$smtpPortInput = Read-Host 'SMTP port [465]'
-$env:SMTP_PORT = if ([string]::IsNullOrWhiteSpace($smtpPortInput)) { '465' } else { $smtpPortInput.Trim() }
+$smtpPortInput = Read-Host 'Primary SMTP port [587]'
+$env:SMTP_PORT = if ([string]::IsNullOrWhiteSpace($smtpPortInput)) { '587' } else { $smtpPortInput.Trim() }
 if ($env:SMTP_PORT -notin @('465', '587')) {
     $env:DB_PASSWORD = ''
     throw 'SMTP port must be 465 or 587.'
 }
+$env:SMTP_PORT_FALLBACK = if ($env:SMTP_PORT -eq '465') { '587' } else { '465' }
 
 $env:SMTP_USERNAME = Read-Host 'Gmail sender address'
 if ($env:SMTP_USERNAME -notmatch '^[^\s@]+@[^\s@]+\.[^\s@]+$') {
@@ -78,6 +79,7 @@ finally {
     $env:MAIL_FROM_NAME = ''
     $env:SMTP_HOST = ''
     $env:SMTP_PORT = ''
+    $env:SMTP_PORT_FALLBACK = ''
     $env:MAKE_FINANCE_ALERT_WEBHOOK_URL = ''
     $env:MAKE_FINANCE_ALERT_WEBHOOK_API_KEY = ''
 }
