@@ -5,7 +5,7 @@
 
 Email verification columns are created by `migrations/007_email_verification.sql`. Before deploying secure password-reset links, apply `migrations/008_password_reset_tokens.sql` to the `redmanfinance` database. It adds only the missing reset-token columns and can be rerun safely.
 
-The Render service uses `APP_BASE_URL` to generate account links. SMTP delivery uses `SMTP_HOST`, `SMTP_USERNAME`, and `SMTP_PASSWORD`. It tries `SMTP_PORT` first (default `587`) and then `SMTP_PORT_FALLBACK` (default `465`); each port automatically uses its corresponding encryption (STARTTLS on 587, implicit TLS on 465). Delivery failures are recorded in Render logs with the port and server error, but never the SMTP password.
+The Render service uses `APP_BASE_URL` to generate account links. This service currently uses Gmail SMTP with `SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_PORT`, and `SMTP_PORT_FALLBACK`; set `MAIL_FROM_ADDRESS` to the same Gmail sender (`redmanfinance.onrender.com@gmail.com`). Render Free web services block outbound traffic on ports 25, 465, and 587, so this Gmail SMTP setup requires a paid Render web service. No email-provider API key is needed. Once on a plan that permits SMTP egress, delivery tries `SMTP_PORT` first (587 with STARTTLS by default) and then `SMTP_PORT_FALLBACK` (465 with implicit TLS). Delivery failures are recorded in application logs without logging the SMTP password.
 
 ## Risk management migration
 

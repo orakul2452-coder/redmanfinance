@@ -31,6 +31,10 @@ services:
         value: "587"
       - key: SMTP_PORT_FALLBACK
         value: "465"
+      - key: MAIL_FROM_ADDRESS
+        value: redmanfinance.onrender.com@gmail.com
+      - key: MAIL_FROM_NAME
+        value: Redman Finance
       - key: MAKE_FINANCE_ALERT_WEBHOOK_URL
         sync: false
       - key: MAKE_FINANCE_ALERT_WEBHOOK_API_KEY

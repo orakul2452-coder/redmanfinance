@@ -45,58 +45,23 @@ $message = $_POST['message'];
 
 $emails = $link->real_escape_string($_POST['emails']);
 
-
-
-								
-                			      
-
-include_once "PHPMailer/PHPMailer.php";
-    require_once 'PHPMailer/Exception.php';
-
-//PHPMailer Object
-$mail = new PHPMailer;
-
-//From email address and name
-$mail->setFrom($emaila);
-   $mail->FromName = $name;
-
-//To address and name
-$mail->addAddress("$emails");
-
-//Address to which recipient will reply
-
-//Send HTML or Plain Text email
-$mail->isHTML(true);
-
-$mail->Subject = $subject;
-
-$mail->Body = '<div style="background: #f5f7f8;width: 100%;height: 100%; font-family: sans-serif; font-weight: 100;" class="be_container"> 
-
-<div style="background:#fff;max-width: 600px;margin: 0px auto;padding: 30px;"class="be_inner_containr"> <div class="be_header">
-
-
-
-<div style="clear: both;"></div> 
-
-<div class="be_bluebar" style="background: #fff; padding: 20px; color: #fff;margin-top: 10px;">
-
-<h1 style="color: #000;">'.$subject.' </h1>
-
-</div> </div> 
-
-<div class="be_body" style="padding: 20px;"> <p style="line-height: 25px;">
-
-'.$message.'
-</p>  </div> </div>';
-
-if($mail->send()) {
-  
-    $msg =  "Mail has been sent successfully!";
+require_once __DIR__ . '/../../email_notifications.php';
+try {
+  redman_email_send_with_smtp_fallback(static function () use ($emails, $emaila, $name, $subject, $message) {
+    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+    $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: ($emaila ?: (getenv('SMTP_USERNAME') ?: '')), $name ?: (getenv('MAIL_FROM_NAME') ?: 'Redman Finance'));
+    $mail->addAddress($emails);
+    $mail->isHTML(true);
+    $mail->Subject = $subject;
+    $mail->Body = '<div style="background:#f5f7f8;font-family:sans-serif"><div style="background:#fff;max-width:600px;margin:0 auto;padding:30px"><h1>' . htmlspecialchars($subject, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h1><p style="line-height:1.6">' . nl2br(htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) . '</p></div></div>';
+    $mail->AltBody = $message;
+    return $mail;
+  }, 'Admin one-to-one email');
+  $msg = 'Mail has been sent successfully!';
+} catch (Throwable $mailError) {
+  error_log('Admin one-to-one email failed: ' . $mailError->getMessage());
+  $msg = 'Email delivery failed. Check the application logs and provider settings.';
 }
-               
-           else{
-                $msg = "Something went wrong. Please try again later!";
-            }
         
     }
 

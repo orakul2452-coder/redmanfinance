@@ -38,23 +38,22 @@ VALUES ('$eth','$usd','$btctnx','$email','$status','$tnx')";
 
 if (mysqli_query($link, $sql)) {
 
-  include_once "PHPMailer/PHPMailer.php";
-
-  $mail= new PHPMailer();
-  $mail->setFrom('info@killocoin.com');
-  $mail->addAddress($email, $username);
-  $mail->Subject = "email verification";
-  $mail->isHTML(true);
-  $mail->Body = "
-  
-  <div style='background-color:#fff; color:black;'>
-  <h2>Thank you for investing on coin2wealth</h2>
-  </br>
-<p>Your order of $usd USD worth of $eth  ETH has been sent, your transaction ID is $tnx , you  will be credited once your order is confirmed</p>
-</div>";
-  if($mail->send()){
-
-    $msg= " Your order of $usd USD worth of $eth  ETH has been sent, your transaction ID is $tnx , you  will be credited once your order is confirmed ";
+  require_once __DIR__ . '/../../email_notifications.php';
+  try {
+    redman_email_send_with_smtp_fallback(static function () use ($email, $username, $usd, $eth, $tnx) {
+      $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+      $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: (getenv('SMTP_USERNAME') ?: ''));
+      $mail->addAddress($email, $username);
+      $mail->Subject = 'Investment transaction update';
+      $mail->isHTML(true);
+      $mail->Body = "<div style='background-color:#fff;color:black'><h2>Thank you for investing with Redman Finance</h2><p>Your order of $usd USD worth of $eth ETH has been submitted. Transaction ID: $tnx. It will be credited once confirmed.</p></div>";
+      $mail->AltBody = "Your order of $usd USD worth of $eth ETH has been submitted. Transaction ID: $tnx. It will be credited once confirmed.";
+      return $mail;
+    }, 'Admin investment transaction email');
+    $msg = "Your order of $usd USD worth of $eth ETH has been submitted, transaction ID $tnx.";
+  } catch (Throwable $mailError) {
+    error_log('Admin investment transaction email failed: ' . $mailError->getMessage());
+    $msg = 'The transaction was recorded, but its email notification could not be delivered.';
   }
 
 

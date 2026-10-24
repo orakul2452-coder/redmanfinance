@@ -9,38 +9,29 @@ if ($argc !== 2 || !filter_var($argv[1], FILTER_VALIDATE_EMAIL)) {
     exit(2);
 }
 
-$smtpHost = getenv('SMTP_HOST') ?: '';
-$smtpUsername = getenv('SMTP_USERNAME') ?: '';
-$smtpPassword = getenv('SMTP_PASSWORD') ?: '';
-$smtpPort = (int)(getenv('SMTP_PORT') ?: 465);
-if ($smtpHost === '' || $smtpUsername === '' || $smtpPassword === '' || !in_array($smtpPort, [465, 587], true)) {
-    fwrite(STDERR, "SMTP settings are incomplete. Configure host, port, username and password in the local process environment.\n");
-    exit(2);
-}
-
-require_once __DIR__ . '/../PHPMailer/Exception.php';
-require_once __DIR__ . '/../PHPMailer/PHPMailer.php';
-require_once __DIR__ . '/../PHPMailer/SMTP.php';
+require_once __DIR__ . '/../email_notifications.php';
 
 try {
-    $mail = new PHPMailer\PHPMailer\PHPMailer(true);
-    $mail->isSMTP();
-    $mail->Host = $smtpHost;
-    $mail->SMTPAuth = true;
-    $mail->Username = $smtpUsername;
-    $mail->Password = $smtpPassword;
-    $mail->Port = $smtpPort;
-    $mail->SMTPSecure = $smtpPort === 465 ? 'ssl' : 'tls';
-    $mail->setFrom(getenv('MAIL_FROM_ADDRESS') ?: $smtpUsername, getenv('MAIL_FROM_NAME') ?: 'Redman Finance');
-    $mail->addAddress($argv[1]);
-    $mail->isHTML(true);
-    $mail->Subject = 'Redman Finance SMTP test';
-    $mail->Body = '<p>This is a test message confirming the Redman Finance local SMTP configuration.</p>';
-    $mail->AltBody = 'This is a test message confirming the Redman Finance local SMTP configuration.';
-    $mail->send();
-    fwrite(STDOUT, "SMTP test email sent successfully. Check the recipient inbox and spam folder.\n");
+    $smtpUsername = trim((string)(getenv('SMTP_USERNAME') ?: ''));
+    $fromAddress = trim((string)(getenv('MAIL_FROM_ADDRESS') ?: $smtpUsername));
+    if ($fromAddress === '' || !filter_var($fromAddress, FILTER_VALIDATE_EMAIL)) {
+        throw new RuntimeException('Set MAIL_FROM_ADDRESS to a valid verified sender address.');
+    }
+
+    redman_email_send_with_smtp_fallback(static function () use ($argv, $fromAddress) {
+        $mail = new PHPMailer\PHPMailer\PHPMailer(true);
+        $mail->setFrom($fromAddress, getenv('MAIL_FROM_NAME') ?: 'Redman Finance');
+        $mail->addAddress($argv[1]);
+        $mail->isHTML(true);
+        $mail->Subject = 'Redman Finance delivery test';
+        $mail->Body = '<p>This is a test message confirming the Redman Finance email delivery configuration.</p>';
+        $mail->AltBody = 'This is a test message confirming the Redman Finance email delivery configuration.';
+        return $mail;
+    }, 'Email delivery test');
+
+    fwrite(STDOUT, "SMTP accepted the test email. Check the recipient inbox and spam folder.\n");
 } catch (Throwable $error) {
-    error_log('Local SMTP test failed: ' . $error->getMessage());
-    fwrite(STDERR, "SMTP test failed. Check the local SMTP settings and see the local PHP error log for details.\n");
+    error_log('Email delivery test failed: ' . $error->getMessage());
+    fwrite(STDERR, "Email delivery test failed: " . $error->getMessage() . "\n");
     exit(1);
 }

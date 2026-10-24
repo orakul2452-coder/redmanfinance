@@ -40,8 +40,7 @@ function redman_email_verification_issue(mysqli $link, int $userId, string $reci
         if (!$link->commit()) {
             throw new RuntimeException('Unable to commit email verification request.');
         }
-        redman_email_dispatch($link, $notificationId);
-        return true;
+        return redman_email_dispatch($link, $notificationId);
     } catch (Throwable $error) {
         $link->rollback();
         throw $error;
