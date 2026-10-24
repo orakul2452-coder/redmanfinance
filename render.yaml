@@ -37,7 +37,11 @@ services:
         value: Redman Finance
       - key: MAKE_FINANCE_ALERT_WEBHOOK_URL
         sync: false
+      - key: MAKE_EMAIL_WEBHOOK_URL
+        sync: false
       - key: MAKE_FINANCE_ALERT_WEBHOOK_API_KEY
         sync: false
+      - key: EMAIL_DELIVERY_PAUSED
+        value: "true"
       - key: ADMIN_ALERT_EMAIL
         sync: false

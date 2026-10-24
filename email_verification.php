@@ -4,6 +4,10 @@ require_once __DIR__ . '/email_notifications.php';
 
 function redman_email_verification_issue(mysqli $link, int $userId, string $recipient, ?string $pendingEmail = null): bool
 {
+    if (redman_email_delivery_paused()) {
+        return true;
+    }
+
     if ($userId < 1 || !filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
         throw new InvalidArgumentException('A valid account and email address are required.');
     }

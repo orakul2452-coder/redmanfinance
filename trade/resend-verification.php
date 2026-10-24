@@ -26,14 +26,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $lookup->close();
 
         if ($accountFound) {
-            try {
-                redman_email_verification_issue($link, (int)$userId, $email);
-            } catch (Throwable $error) {
-                error_log('Verification resend failed for user ' . (int)$userId . ': ' . $error->getMessage());
-                $message = 'We could not send the email right now. Please try again later.';
+            if (redman_email_delivery_paused()) {
+                $message = 'Verification emails are temporarily paused while SMTP is configured. You can continue using your account normally for now.';
+            } else {
+                try {
+                    redman_email_verification_issue($link, (int)$userId, $email);
+                } catch (Throwable $error) {
+                    error_log('Verification resend failed for user ' . (int)$userId . ': ' . $error->getMessage());
+                    $message = 'We could not send the email right now. Please try again later.';
+                }
             }
         }
-        if ($message === '') {
+        if ($message === '' && !redman_email_delivery_paused()) {
             $message = 'If an unverified account uses that email address, a new verification link has been requested.';
         }
     }

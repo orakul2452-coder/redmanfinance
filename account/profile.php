@@ -122,24 +122,33 @@ if (isset($_POST['request_email_change']) || isset($_POST['resend_email_verifica
             if ($emailInUse) {
                 $err = 'That email address is already associated with an account.';
             } else {
-                try {
-                    redman_email_verification_issue($link, (int)$row1['id'], $newEmail, $newEmail);
+                if (redman_email_delivery_paused()) {
                     $pendingEmail = $newEmail;
-                    $msg = 'A verification link was sent to the new email. Your account email changes after you confirm it.';
-                } catch (Throwable $verificationError) {
-                    error_log('Email-change verification request failed for user ' . (int)$row1['id'] . ': ' . $verificationError->getMessage());
-                    $err = 'Could not send a verification link right now. Please try again later.';
+                    $msg = 'Email verification is temporarily paused. Your account email change request is saved for when SMTP is configured.';
+                } else {
+                    try {
+                        redman_email_verification_issue($link, (int)$row1['id'], $newEmail, $newEmail);
+                        $pendingEmail = $newEmail;
+                        $msg = 'A verification link was sent to the new email. Your account email changes after you confirm it.';
+                    } catch (Throwable $verificationError) {
+                        error_log('Email-change verification request failed for user ' . (int)$row1['id'] . ': ' . $verificationError->getMessage());
+                        $err = 'Could not send a verification link right now. Please try again later.';
+                    }
                 }
             }
         }
     } else {
-        try {
-            $verificationRecipient = $pendingEmail !== '' ? $pendingEmail : $email;
-            redman_email_verification_issue($link, (int)$row1['id'], $verificationRecipient, $pendingEmail !== '' ? $pendingEmail : null);
-            $msg = 'A fresh verification link was sent to ' . htmlspecialchars($verificationRecipient, ENT_QUOTES, 'UTF-8') . '.';
-        } catch (Throwable $verificationError) {
-            error_log('Email verification resend failed for user ' . (int)$row1['id'] . ': ' . $verificationError->getMessage());
-            $err = 'Could not send a verification link right now. Please try again later.';
+        if (redman_email_delivery_paused()) {
+            $msg = 'Email verification is temporarily paused. You can keep using your account while SMTP is being set up.';
+        } else {
+            try {
+                $verificationRecipient = $pendingEmail !== '' ? $pendingEmail : $email;
+                redman_email_verification_issue($link, (int)$row1['id'], $verificationRecipient, $pendingEmail !== '' ? $pendingEmail : null);
+                $msg = 'A fresh verification link was sent to ' . htmlspecialchars($verificationRecipient, ENT_QUOTES, 'UTF-8') . '.';
+            } catch (Throwable $verificationError) {
+                error_log('Email verification resend failed for user ' . (int)$row1['id'] . ': ' . $verificationError->getMessage());
+                $err = 'Could not send a verification link right now. Please try again later.';
+            }
         }
     }
 }

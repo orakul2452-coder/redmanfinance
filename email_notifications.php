@@ -4,6 +4,12 @@ require_once __DIR__ . '/PHPMailer/Exception.php';
 require_once __DIR__ . '/PHPMailer/PHPMailer.php';
 require_once __DIR__ . '/PHPMailer/SMTP.php';
 
+function redman_email_delivery_paused(): bool
+{
+    $value = strtolower(trim((string)(getenv('EMAIL_DELIVERY_PAUSED') ?: '')));
+    return $value !== '' && in_array($value, ['1', 'true', 'yes', 'on'], true);
+}
+
 function redman_smtp_ports(): array
 {
     $primarySetting = getenv('SMTP_PORT') ?: '587';
@@ -21,8 +27,91 @@ function redman_smtp_ports(): array
     return [$primary, $fallback];
 }
 
+function redman_make_send_email(PHPMailer\PHPMailer\PHPMailer $mail, string $context, ?callable $request = null): void
+{
+    if (redman_email_delivery_paused()) {
+        return;
+    }
+
+    $webhookUrl = trim((string)(getenv('MAKE_EMAIL_WEBHOOK_URL') ?: getenv('MAKE_FINANCE_ALERT_WEBHOOK_URL') ?: ''));
+    if ($webhookUrl === '' || !filter_var($webhookUrl, FILTER_VALIDATE_URL) || strtolower((string)parse_url($webhookUrl, PHP_URL_SCHEME)) !== 'https') {
+        throw new RuntimeException('A valid HTTPS Make email webhook URL is not configured.');
+    }
+    $recipients = array_map(static fn(array $address): string => $address[0], $mail->getToAddresses());
+    if ($recipients === [] || $mail->From === '') {
+        throw new RuntimeException('Email sender and recipient must be configured.');
+    }
+
+    $payload = json_encode([
+        'schema_version' => 1,
+        'type' => 'email',
+        'to' => implode(',', $recipients),
+        'from' => $mail->From,
+        'from_name' => $mail->FromName,
+        'subject' => $mail->Subject,
+        'html' => $mail->Body,
+        'text' => $mail->AltBody,
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+
+    $request ??= static function (string $url, string $payload): array {
+        $headers = "Content-Type: application/json\r\nAccept: application/json\r\n";
+        $apiKey = trim((string)(getenv('MAKE_FINANCE_ALERT_WEBHOOK_API_KEY') ?: ''));
+        if ($apiKey !== '') {
+            $headers .= 'x-make-apikey: ' . $apiKey . "\r\n";
+        }
+        $contextOptions = [
+            'http' => [
+                'method' => 'POST',
+                'header' => $headers,
+                'content' => $payload,
+                'timeout' => 15,
+                'ignore_errors' => true,
+            ],
+        ];
+        $response = @file_get_contents($url, false, stream_context_create($contextOptions));
+        $status = 0;
+        if (preg_match('/\\s(\\d{3})\\s/', $http_response_header[0] ?? '', $matches)) {
+            $status = (int)$matches[1];
+        }
+        return [$status, is_string($response) ? $response : ''];
+    };
+
+    [$status, $responseBody] = $request($webhookUrl, $payload);
+    $result = json_decode((string)$responseBody, true);
+    $isSuccess = $status >= 200 && $status < 300 && (
+        trim((string)$responseBody) === '' ||
+        (
+            is_array($result) && (
+                ($result['delivered'] ?? false) === true ||
+                ($result['accepted'] ?? false) === true ||
+                ($result['success'] ?? false) === true ||
+                in_array(strtolower((string)($result['status'] ?? '')), ['delivered', 'accepted', 'sent', 'success', 'queued'], true)
+            )
+        )
+    );
+
+    if (!$isSuccess) {
+        error_log($context . ' Make webhook did not confirm delivery (HTTP ' . (int)$status . ').');
+        throw new RuntimeException($context . ' Make webhook did not confirm delivery.');
+    }
+}
+
 function redman_email_send_with_smtp_fallback(callable $configureMessage, string $context): void
 {
+    if (redman_email_delivery_paused()) {
+        return;
+    }
+
+    $makeWebhookUrl = trim((string)(getenv('MAKE_EMAIL_WEBHOOK_URL') ?: getenv('MAKE_FINANCE_ALERT_WEBHOOK_URL') ?: ''));
+    if ($makeWebhookUrl !== '') {
+        $mail = $configureMessage();
+        if (!$mail instanceof PHPMailer\PHPMailer\PHPMailer) {
+            throw new RuntimeException('Email message factory must return a PHPMailer instance.');
+        }
+        redman_make_send_email($mail, $context);
+        return;
+    }
+
     $ports = redman_smtp_ports();
     $host = getenv('SMTP_HOST') ?: '';
     $username = getenv('SMTP_USERNAME') ?: '';

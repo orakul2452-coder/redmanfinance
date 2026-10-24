@@ -193,30 +193,34 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
             // Attempt to execute the prepared statement
             if(mysqli_stmt_execute($stmt)){
               $userId = (int)mysqli_stmt_insert_id($stmt);
-              $emailDeliveryFailed = false;
-              try {
-                if (!redman_email_enqueue_and_dispatch(
-                  $link,
-                  'welcome:user:' . $userId,
-                  $email,
-                  'welcome',
-                  ['name' => $fname, 'detail' => 'Username: ' . $username . '. Account type: ' . $account_type . '. Account number: ' . $accountNumber]
-                )) {
+              if (!redman_email_delivery_paused()) {
+                $emailDeliveryFailed = false;
+                try {
+                  if (!redman_email_enqueue_and_dispatch(
+                    $link,
+                    'welcome:user:' . $userId,
+                    $email,
+                    'welcome',
+                    ['name' => $fname, 'detail' => 'Username: ' . $username . '. Account type: ' . $account_type . '. Account number: ' . $accountNumber]
+                  )) {
+                    $emailDeliveryFailed = true;
+                  }
+                } catch (Throwable $mailError) {
                   $emailDeliveryFailed = true;
+                  error_log('Welcome notification failed for user ' . $userId . ': ' . $mailError->getMessage());
                 }
-              } catch (Throwable $mailError) {
-                $emailDeliveryFailed = true;
-                error_log('Welcome notification failed for user ' . $userId . ': ' . $mailError->getMessage());
-              }
-              try {
-                if (!redman_email_verification_issue($link, $userId, $email)) {
+                try {
+                  if (!redman_email_verification_issue($link, $userId, $email)) {
+                    $emailDeliveryFailed = true;
+                  }
+                } catch (Throwable $verificationError) {
                   $emailDeliveryFailed = true;
+                  error_log('Registration verification email failed for user ' . $userId . ': ' . $verificationError->getMessage());
                 }
-              } catch (Throwable $verificationError) {
-                $emailDeliveryFailed = true;
-                error_log('Registration verification email failed for user ' . $userId . ': ' . $verificationError->getMessage());
+                header('Location: login.php?registered=1' . ($emailDeliveryFailed ? '&mail=failed' : ''));
+              } else {
+                header('Location: login.php?registered=1');
               }
-              header('Location: login.php?registered=1' . ($emailDeliveryFailed ? '&mail=failed' : ''));
               exit();
             } else {
               error_log('Registration insert failed: ' . mysqli_stmt_error($stmt));

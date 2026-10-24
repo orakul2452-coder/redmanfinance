@@ -42,19 +42,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $stmt->close();
 
     if($row){
-      if (empty($row['email_verified'])) {
-        $msg = 'Please verify your email address before logging in.';
-        $showResend = true;
-      } else {
-        $_SESSION['email'] = $row['email'];
+      $_SESSION['email'] = $row['email'];
 
-        if (empty($row['id_front']) || $row['id_front'] == null || empty($row['id_back']) || $row['id_back'] == null) {
-          header("location: ../account/profile.php");
-        } else {
-          header("location: ../account/");
-        }
-        exit();
+      if (empty($row['id_front']) || $row['id_front'] == null || empty($row['id_back']) || $row['id_back'] == null) {
+        header("location: ../account/profile.php");
+      } else {
+        header("location: ../account/");
       }
+      exit();
     } else {
       $msg = "Email or Password incorrect!";
     }

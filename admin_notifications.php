@@ -41,11 +41,9 @@ function redman_admin_alert_enqueue(mysqli $link, string $eventKey, string $even
 
 function redman_admin_alert_send_email(array $alert): bool
 {
-    $smtpHost = trim((string)(getenv('SMTP_HOST') ?: ''));
     $smtpUsername = trim((string)(getenv('SMTP_USERNAME') ?: ''));
-    $smtpPassword = (string)(getenv('SMTP_PASSWORD') ?: '');
-    $recipient = trim((string)(getenv('ADMIN_ALERT_EMAIL') ?: $smtpUsername));
-    if ($smtpHost === '' || $smtpUsername === '' || $smtpPassword === '' || !filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
+    $recipient = trim((string)(getenv('ADMIN_ALERT_EMAIL') ?: ($smtpUsername ?: (getenv('MAIL_FROM_ADDRESS') ?: ''))));
+    if (!filter_var($recipient, FILTER_VALIDATE_EMAIL)) {
         return false;
     }
 
@@ -140,46 +138,8 @@ function redman_admin_alert_dispatch(mysqli $link, int $id): bool
         return false;
     }
 
-    $webhookUrl = trim((string)(getenv('MAKE_FINANCE_ALERT_WEBHOOK_URL') ?: ''));
-    $makeDelivered = false;
-    if ($webhookUrl !== '' && filter_var($webhookUrl, FILTER_VALIDATE_URL) && strtolower((string)parse_url($webhookUrl, PHP_URL_SCHEME)) === 'https') {
-        $headers = "Content-Type: application/json\r\nAccept: application/json\r\n";
-        $webhookApiKey = trim((string)(getenv('MAKE_FINANCE_ALERT_WEBHOOK_API_KEY') ?: ''));
-        if ($webhookApiKey !== '') {
-            $headers .= 'x-make-apikey: ' . $webhookApiKey . "\r\n";
-        }
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => $headers,
-                'content' => (string)$row['payload'],
-                'timeout' => 8,
-                'ignore_errors' => true,
-            ],
-        ]);
-        $response = @file_get_contents($webhookUrl, false, $context);
-        $statusLine = $http_response_header[0] ?? '';
-        $makeResult = is_string($response) ? json_decode($response, true) : null;
-        $makeDelivered = $response !== false
-            && preg_match('/\s2\d\d\s/', $statusLine) === 1
-            && is_array($makeResult)
-            && ($makeResult['delivered'] ?? false) === true;
-    }
-
-    if ($makeDelivered) {
-        $sent = $link->prepare("UPDATE admin_alert_outbox SET status = 'sent', sent_at = NOW(), last_error = NULL WHERE id = ? AND status = 'sending'");
-        if (!$sent) {
-            error_log('Admin alert sent but could not update outbox status for id ' . $id);
-            return false;
-        }
-        $sent->bind_param('i', $id);
-        $success = $sent->execute();
-        $sent->close();
-        return $success;
-    }
-
     if (redman_admin_alert_send_email($row)) {
-        $fallback = $link->prepare("UPDATE admin_alert_outbox SET status = 'sent', sent_at = NOW(), last_error = 'Make unavailable; delivered via SMTP fallback.' WHERE id = ? AND status = 'sending'");
+        $fallback = $link->prepare("UPDATE admin_alert_outbox SET status = 'sent', sent_at = NOW(), last_error = NULL WHERE id = ? AND status = 'sending'");
         if (!$fallback) {
             error_log('Admin alert delivered via SMTP but fallback status could not be saved for id ' . $id);
             return false;
@@ -192,7 +152,7 @@ function redman_admin_alert_dispatch(mysqli $link, int $id): bool
 
     $nextStatus = $attempts >= 8 ? 'failed' : 'queued';
     $delayMinutes = min(360, 2 ** min($attempts, 8));
-    $safeError = 'Make and SMTP delivery failed; inspect Make scenario history and application logs.';
+    $safeError = 'Email delivery failed; inspect Make scenario history and application logs.';
     $retry = $link->prepare('UPDATE admin_alert_outbox SET status = ?, available_at = DATE_ADD(NOW(), INTERVAL ? MINUTE), last_error = ? WHERE id = ? AND status = \'sending\'');
     if (!$retry) {
         error_log('Admin alert delivery failed and retry state could not be saved for id ' . $id);
